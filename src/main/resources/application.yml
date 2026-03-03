@@ -1,0 +1,12 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: bpmn-agent-backend
+
+app:
+  jwt:
+    # Base64-encoded 512-bit secret key for HS512/HS256 usage
+    secret: bXktc3VwZXItc2VjdXJlLWp3dC1zaWduaW5nLWtleS1jaGFuZ2UtdGhpcy1pbi1wcm9kdWN0aW9uLWJ5LWVudg==
+    expiration-ms: 86400000

@@ -1,6 +1,7 @@
 package com.example.bpmn.security;
 
 import com.example.bpmn.model.AppUser;
+import com.example.bpmn.model.Role;
 import org.springframework.security.core.GrantedAuthority;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.userdetails.User;
@@ -21,8 +22,8 @@ public class UserDetailsServiceImpl implements UserDetailsService {
 
     public UserDetailsServiceImpl() {
         // Initialiser les utilisateurs par défaut dans le constructeur
-        users.put("admin@bouygues.com", new AppUser("admin@bouygues.com", "admin123", "ADMIN"));
-        users.put("user@bouygues.com", new AppUser("user@bouygues.com", "user123", "USER"));
+        users.put("admin@bouygues.com", new AppUser("admin@bouygues.com", "admin123", Role.ADMIN));
+        users.put("user@bouygues.com", new AppUser("user@bouygues.com", "user123", Role.USER));
     }
 
     @Override
@@ -32,7 +33,7 @@ public class UserDetailsServiceImpl implements UserDetailsService {
             throw new UsernameNotFoundException("User not found with email: " + email);
         }
 
-        GrantedAuthority authority = new SimpleGrantedAuthority("ROLE_" + appUser.role());
+        GrantedAuthority authority = new SimpleGrantedAuthority("ROLE_" + appUser.role().name());
         return new User(appUser.email(), "{noop}" + appUser.password(), List.of(authority));
     }
 

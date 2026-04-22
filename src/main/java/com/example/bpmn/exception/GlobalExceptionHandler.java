@@ -38,7 +38,17 @@ public class GlobalExceptionHandler {
         );
         return ResponseEntity.status(HttpStatus.CONFLICT).body(error);
     }
-    
+        @ExceptionHandler(InvalidRoleException.class)
+    public ResponseEntity<ApiErrorResponse> handleInvalidRole(InvalidRoleException ex,
+                                                               HttpServletRequest request) {
+        ApiErrorResponse error = new ApiErrorResponse(
+                HttpStatus.BAD_REQUEST.value(),
+                HttpStatus.BAD_REQUEST.getReasonPhrase(),
+                ex.getMessage(),
+                request.getRequestURI()
+        );
+        return ResponseEntity.badRequest().body(error);
+    }
     @ExceptionHandler(HttpMessageNotReadableException.class)
     public ResponseEntity<ApiErrorResponse> handleUnreadableBody(HttpMessageNotReadableException ex,
                                                                   HttpServletRequest request) {
@@ -71,5 +81,17 @@ public class GlobalExceptionHandler {
                 request.getRequestURI()
         );
         return ResponseEntity.badRequest().body(error);
+    }
+    @ExceptionHandler(CamundaIntegrationException.class)
+    public ResponseEntity<ApiErrorResponse> handleCamundaIntegration(CamundaIntegrationException ex,
+                                                                     HttpServletRequest request) {
+        HttpStatus status = ex.getStatus();
+        ApiErrorResponse error = new ApiErrorResponse(
+                status.value(),
+                status.getReasonPhrase(),
+                ex.getMessage(),
+                request.getRequestURI()
+        );
+        return ResponseEntity.status(status).body(error);
     }
 }

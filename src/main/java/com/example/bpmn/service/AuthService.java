@@ -6,6 +6,7 @@ import com.example.bpmn.dto.RegisterRequest;
 import com.example.bpmn.exception.EmailAlreadyExistsException;
 import com.example.bpmn.exception.InvalidCredentialsException;
 import com.example.bpmn.model.AppUser;
+import com.example.bpmn.model.Role;
 import com.example.bpmn.security.JwtUtils;
 import com.example.bpmn.security.UserDetailsServiceImpl;
 import org.springframework.security.authentication.AuthenticationManager;
@@ -38,7 +39,7 @@ public class AuthService {
             String token = jwtUtils.generateToken(authentication);
             AppUser user = userDetailsService.findByEmail(request.getEmail());
 
-            return new LoginResponse(token, "Bearer", user.email(), user.role());
+            return new LoginResponse(token, "Bearer", user.email(), user.role().name());
         } catch (BadCredentialsException ex) {
             throw new InvalidCredentialsException("Invalid email or password");
         }
@@ -52,10 +53,11 @@ public class AuthService {
         }
         
         // Créer le nouvel utilisateur (toujours avec le rôle USER par défaut)
+        Role role = Role.fromRequest(request.getRole());
         AppUser newUser = new AppUser(
             request.getEmail(),
-            request.getPassword(),  // Note: on stocke en clair car vous utilisez {noop}
-            "USER"
+             request.getPassword(),
+            role // Note: on stocke en clair car vous utilisez {noop}
         );
         
         // Ajouter l'utilisateur à la map

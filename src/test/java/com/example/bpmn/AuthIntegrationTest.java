@@ -81,4 +81,79 @@ class AuthIntegrationTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.email").value("user@bouygues.com"));
     }
+    @Test
+    void registerShouldAssignRequestedAdminRole() throws Exception {
+        String registerBody = """
+                {
+                  "email": "new-admin@bouygues.com",
+                  "password": "password123",
+                  "role": "ADMIN"
+                }
+                """;
+
+        mockMvc.perform(post("/api/auth/register")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(registerBody))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.message").value("User registered successfully"));
+
+        String loginBody = """
+                {
+                  "email": "new-admin@bouygues.com",
+                  "password": "password123"
+                }
+                """;
+
+        mockMvc.perform(post("/api/auth/login")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(loginBody))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.role").value("ADMIN"));
+    }
+
+    @Test
+    void registerShouldDefaultRoleToUserWhenMissing() throws Exception {
+        String registerBody = """
+                {
+                  "email": "new-user@bouygues.com",
+                  "password": "password123"
+                }
+                """;
+
+        mockMvc.perform(post("/api/auth/register")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(registerBody))
+                .andExpect(status().isCreated());
+
+        String loginBody = """
+                {
+                  "email": "new-user@bouygues.com",
+                  "password": "password123"
+                }
+                """;
+
+        mockMvc.perform(post("/api/auth/login")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(loginBody))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.role").value("USER"));
+    }
+
+    @Test
+    void registerShouldRejectInvalidRole() throws Exception {
+        String registerBody = """
+                {
+                  "email": "bad-role@bouygues.com",
+                  "password": "password123",
+                  "role": "SUPER_ADMIN"
+                }
+                """;
+
+        mockMvc.perform(post("/api/auth/register")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(registerBody))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value("Role must be USER or ADMIN"));
+    }
 }
+

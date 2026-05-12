@@ -1,0 +1,127 @@
+﻿$body = @'
+{
+"process": {
+"id": "order_process",
+"name": "Order Processing"
+},
+"elements": [
+{
+"id": "task_submit",
+"type": "userTask",
+"name": "Soumettre commande"
+},
+{
+"id": "task_validate",
+"type": "serviceTask",
+"name": "Valider commande"
+},
+{
+"id": "gateway_payment",
+"type": "exclusiveGateway",
+"name": "Paiement valide ?"
+},
+{
+"id": "task_prepare",
+"type": "serviceTask",
+"name": "Préparer livraison"
+},
+{
+"id": "task_ship",
+"type": "serviceTask",
+"name": "Envoyer commande"
+},
+{
+"id": "task_reject",
+"type": "serviceTask",
+"name": "Rejeter commande"
+},
+{
+"id": "end_success",
+"type": "endEvent",
+"name": "Commande terminée"
+},
+{
+"id": "end_reject",
+"type": "endEvent",
+"name": "Commande rejetée"
+}
+],
+"flows": [
+{
+"id": "flow_1",
+"from": "startEvent",
+"to": "task_submit"
+},
+{
+"id": "flow_2",
+"from": "task_submit",
+"to": "task_validate"
+},
+{
+"id": "flow_3",
+"from": "task_validate",
+"to": "gateway_payment"
+},
+{
+  "id": "flow_4",
+  "from": "gateway_payment",
+  "to": "task_prepare"
+},
+{
+"id": "flow_5",
+"from": "gateway_payment",
+"to": "task_reject"
+},
+{
+"id": "flow_6",
+"from": "task_prepare",
+"to": "task_ship"
+},
+{
+"id": "flow_7",
+"from": "task_ship",
+"to": "end_success"
+},
+{
+"id": "flow_8",
+"from": "task_reject",
+"to": "end_reject"
+}
+]
+}
+'@
+
+try {
+
+$response = Invoke-WebRequest `
+  -Uri "http://localhost:8080/generate-bpmn-xml" `
+  -Method Post `
+  -ContentType "application/json" `
+  -Headers @{ Accept = "application/xml" } `
+  -Body $body
+
+Write-Host "STATUS CODE:"
+Write-Host $response.StatusCode
+
+$response.Content | Out-File -FilePath ".\generated-process.bpmn" -Encoding utf8
+
+Write-Host "BPMN file generated successfully."
+
+
+}
+catch {
+
+Write-Host "ERROR STATUS CODE:"
+Write-Host $_.Exception.Response.StatusCode.value__
+
+$reader = New-Object System.IO.StreamReader($_.Exception.Response.GetResponseStream())
+$reader.BaseStream.Position = 0
+$reader.DiscardBufferedData()
+
+$responseBody = $reader.ReadToEnd()
+
+Write-Host "ERROR RESPONSE:"
+Write-Host $responseBody
+
+
+}

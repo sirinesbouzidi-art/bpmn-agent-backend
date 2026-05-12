@@ -11,6 +11,8 @@ import org.springframework.test.web.servlet.MockMvc;
 
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.hamcrest.Matchers.containsString;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -49,7 +51,52 @@ class AuthIntegrationTest {
                 .andExpect(jsonPath("$.message").value("Request body is required"))
                 .andExpect(jsonPath("$.path").value("/api/auth/login"));
     }
+    @Test
+    void generateBpmnXmlShouldBePublic() throws Exception {
+        String body = """
+                {
+                  "process": {
+                    "id": "process_test",
+                    "name": "Process Test"
+                  },
+                  "elements": [
+                    {
+                      "id": "task_1",
+                      "type": "userTask",
+                      "name": "Saisir demande"
+                    },
+                    {
+                      "id": "end_1",
+                      "type": "endEvent",
+                      "name": "Fin"
+                    }
+                  ],
+                  "flows": [
+                    {
+                      "id": "flow_start_task",
+                      "from": "startEvent",
+                      "to": "task_1"
+                    },
+                    {
+                      "id": "flow_task_end",
+                      "from": "task_1",
+                      "to": "end_1"
+                    }
+                  ]
+                }
+                """;
 
+        mockMvc.perform(post("/generate-bpmn-xml")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .accept(MediaType.APPLICATION_XML)
+                        .content(body))
+                .andExpect(status().isOk())
+                .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_XML))
+                .andExpect(content().string(containsString("BPMNShape")))
+                .andExpect(content().string(containsString("BPMNEdge")))
+                .andExpect(content().string(containsString("Bounds")))
+                .andExpect(content().string(containsString("waypoint")));
+    }
     @Test
     void protectedEndpointShouldRequireJwt() throws Exception {
         mockMvc.perform(get("/api/test"))

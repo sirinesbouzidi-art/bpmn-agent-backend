@@ -19,6 +19,7 @@
     <properties>
         <java.version>17</java.version>
         <jjwt.version>0.12.6</jjwt.version>
+        <camunda.bpmn.model.version>7.22.0</camunda.bpmn.model.version>
     </properties>
 
     <dependencies>
@@ -38,6 +39,11 @@
             <groupId>io.camunda</groupId>
             <artifactId>zeebe-client-java</artifactId>
             <version>8.5.0</version>
+        </dependency>
+        <dependency>
+            <groupId>org.camunda.bpm.model</groupId>
+            <artifactId>camunda-bpmn-model</artifactId>
+            <version>${camunda.bpmn.model.version}</version>
         </dependency>
         <dependency>
             <groupId>com.h2database</groupId>

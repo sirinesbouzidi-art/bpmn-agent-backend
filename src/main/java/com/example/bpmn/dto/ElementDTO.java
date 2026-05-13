@@ -1,6 +1,9 @@
 package com.example.bpmn.dto;
 
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.Valid;
+import java.util.ArrayList;
+import java.util.List;
 
 public class ElementDTO {
 
@@ -11,6 +14,12 @@ public class ElementDTO {
     private String type;
 
     private String name;
+
+    @Valid
+    private List<ElementDTO> elements = new ArrayList<>();
+
+    @Valid
+    private List<FlowDTO> flows = new ArrayList<>();
 
     public String getId() {
         return id;
@@ -34,5 +43,20 @@ public class ElementDTO {
 
     public void setName(String name) {
         this.name = name;
+    }
+    public List<ElementDTO> getElements() {
+        return elements;
+    }
+
+    public void setElements(List<ElementDTO> elements) {
+        this.elements = elements;
+    }
+
+    public List<FlowDTO> getFlows() {
+       return flows;
+    }
+
+    public void setFlows(List<FlowDTO> flows) {
+       this.flows = flows;
     }
 }

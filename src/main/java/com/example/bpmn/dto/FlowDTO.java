@@ -5,6 +5,8 @@ import jakarta.validation.constraints.NotBlank;
 public class FlowDTO {
 
     private String id;
+    private String type;
+    private Boolean defaultFlow;
 
     @NotBlank(message = "flow from is required")
     private String from;
@@ -53,5 +55,20 @@ public class FlowDTO {
 
     public void setCondition(String condition) {
         this.condition = condition;
+    }
+    public String getType() {
+    return type;
+    } 
+
+    public void setType(String type) {
+    this.type = type;
+    }
+
+    public Boolean getDefaultFlow() {
+    return defaultFlow;
+    }
+
+    public void setDefaultFlow(Boolean defaultFlow) {
+    this.defaultFlow = defaultFlow;
     }
 }

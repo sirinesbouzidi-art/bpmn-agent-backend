@@ -1,5 +1,12 @@
 package com.example.bpmn.converter;
 
+import com.example.bpmn.factory.task.TaskFactory;
+import com.example.bpmn.factory.gateway.GatewayFactory;
+import com.example.bpmn.factory.event.EventFactory;
+import com.example.bpmn.factory.flow.FlowFactory;
+import com.example.bpmn.factory.subprocess.SubProcessFactory;
+import org.camunda.bpm.model.bpmn.instance.FlowElement;
+import org.camunda.bpm.model.bpmn.instance.SubProcess;
 import com.example.bpmn.dto.BpmnRequest;
 import com.example.bpmn.dto.ElementDTO;
 import com.example.bpmn.dto.FlowDTO;
@@ -9,7 +16,6 @@ import org.camunda.bpm.model.bpmn.BpmnModelException;
 import org.camunda.bpm.model.bpmn.BpmnModelInstance;
 import org.camunda.bpm.model.bpmn.builder.AbstractFlowNodeBuilder;
 import org.camunda.bpm.model.bpmn.impl.BpmnModelConstants;
-import org.camunda.bpm.model.bpmn.instance.ConditionExpression;
 import org.camunda.bpm.model.bpmn.instance.Definitions;
 import org.camunda.bpm.model.bpmn.instance.EndEvent;
 import org.camunda.bpm.model.bpmn.instance.ParallelGateway;
@@ -18,10 +24,7 @@ import org.camunda.bpm.model.bpmn.instance.InclusiveGateway;
 import org.camunda.bpm.model.bpmn.instance.FlowNode;
 import org.camunda.bpm.model.bpmn.instance.Process;
 import org.camunda.bpm.model.bpmn.instance.SequenceFlow;
-import org.camunda.bpm.model.bpmn.instance.ServiceTask;
-import org.camunda.bpm.model.bpmn.instance.ScriptTask;
 import org.camunda.bpm.model.bpmn.instance.StartEvent;
-import org.camunda.bpm.model.bpmn.instance.UserTask;
 import org.camunda.bpm.model.bpmn.instance.bpmndi.BpmnDiagram;
 import org.camunda.bpm.model.bpmn.instance.bpmndi.BpmnEdge;
 import org.camunda.bpm.model.bpmn.instance.bpmndi.BpmnPlane;
@@ -34,11 +37,9 @@ import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 
 @Component
 public class JsonToBpmnConverter {
@@ -46,12 +47,20 @@ public class JsonToBpmnConverter {
     private static final String START_EVENT_ID = "startEvent";
     private static final double START_X = 160;
     private static final double START_Y = 120;
-    private static final double HORIZONTAL_GAP = 180;
-    private static final double VERTICAL_GAP = 140;
+    private static final double HORIZONTAL_GAP = 350;
+    private static final double VERTICAL_GAP = 250;
     private static final double EVENT_SIZE = 36;
     private static final double GATEWAY_SIZE = 50;
     private static final double TASK_WIDTH = 100;
     private static final double TASK_HEIGHT = 80;
+    private final TaskFactory taskFactory = new TaskFactory();
+    private final GatewayFactory gatewayFactory = new GatewayFactory();
+    private final EventFactory eventFactory = new EventFactory();
+    private final FlowFactory flowFactory = new FlowFactory();
+    private final SubProcessFactory subProcessFactory = new SubProcessFactory();
+    private Map<String, NodeLayout> globalNodeLayouts = new HashMap<>();
+
+
 
     public String convert(BpmnRequest request) {
         ProcessDTO processDTO = validateRequest(request);
@@ -74,10 +83,20 @@ public class JsonToBpmnConverter {
             nodesById.put(node.getId(), node);
         }
 
-        Set<String> flowIds = new HashSet<>();
+        
         List<SequenceFlow> sequenceFlows = new ArrayList<>();
+
         for (FlowDTO flow : getFlows(request, processDTO)) {
-            sequenceFlows.add(createSequenceFlow(modelInstance, process, nodesById, flow, flowIds));
+
+        SequenceFlow sequenceFlow =
+            flowFactory.createSequenceFlow(
+                    modelInstance,
+                    process,
+                    flow,
+                    nodesById
+            );
+
+        sequenceFlows.add(sequenceFlow);
         }
 
         applyCamundaModelApiLayout(modelInstance, process, nodesById, sequenceFlows);
@@ -128,69 +147,18 @@ public class JsonToBpmnConverter {
         if (element == null) {
             throw new IllegalArgumentException("BPMN element cannot be null");
         }
-
-        String id = requireText(element.getId(), "element id is required");
         String type = requireText(element.getType(), "element type is required");
 
         return switch (type) {
-            case "userTask" -> createNode(modelInstance, process, id, element.getName(), UserTask.class);
-            case "serviceTask" -> createNode(modelInstance, process, id, element.getName(), ServiceTask.class);
-            case "exclusiveGateway" -> createNode(modelInstance, process, id, element.getName(), ExclusiveGateway.class);
-            case "endEvent" -> createNode(modelInstance, process, id, element.getName(), EndEvent.class);
-            case "parallelGateway" -> createNode(modelInstance, process, id, element.getName(), ParallelGateway.class);
-            case "inclusiveGateway" -> createNode(modelInstance, process, id, element.getName(), InclusiveGateway.class);
-            case "scriptTask" -> createNode(modelInstance, process, id, element.getName(), ScriptTask.class);
+            case "userTask", "serviceTask", "scriptTask", "businessRuleTask", "manualTask", "sendTask", "receiveTask" -> taskFactory.createTask(modelInstance, process, element);
+            case "exclusiveGateway", "parallelGateway", "inclusiveGateway", "eventBasedGateway", "complexGateway" -> gatewayFactory.createGateway(modelInstance, process, element);
+            case "startEvent", "messageStartEvent", "timerStartEvent", "signalStartEvent", "conditionalStartEvent",
+            "intermediateCatchEvent", "intermediateThrowEvent", "messageEvent", "timerEvent", "signalEvent", "escalationEvent", "compensationEvent", "linkEvent",
+            "endEvent", "terminateEndEvent", "errorEndEvent", "messageEndEvent", "signalEndEvent", "escalationEndEvent" -> eventFactory.createEvent( modelInstance, process, element );
+            case "subProcess" -> subProcessFactory.createSubProcess( modelInstance, process, element );
+
             default -> throw new IllegalArgumentException("Unsupported BPMN element type: " + type);
         };
-    }
-
-    private <T extends FlowNode> T createNode(BpmnModelInstance modelInstance, Process process, String id, String name, Class<T> nodeType) {
-        T node = modelInstance.newInstance(nodeType);
-        node.setId(requireText(id, "BPMN node id is required"));
-        setName(node, name);
-        process.addChildElement(node);
-        return node;
-    }
-
-    private SequenceFlow createSequenceFlow(BpmnModelInstance modelInstance, Process process, Map<String, FlowNode> nodesById, FlowDTO flow, Set<String> flowIds) {
-        if (flow == null) {
-            throw new IllegalArgumentException("BPMN flow cannot be null");
-        }
-
-        String from = requireText(flow.getFrom(), "flow from is required");
-        String to = requireText(flow.getTo(), "flow to is required");
-        FlowNode source = nodesById.get(from);
-        FlowNode target = nodesById.get(to);
-
-        if (source == null) {
-            throw new IllegalArgumentException("Unknown source element for flow: " + from);
-        }
-        if (target == null) {
-            throw new IllegalArgumentException("Unknown target element for flow: " + to);
-        }
-
-        String flowId = normalizeFlowId(flow.getId(), from, to, flowIds.size() + 1);
-        if (!flowIds.add(flowId)) {
-            throw new IllegalArgumentException("Duplicate BPMN flow id: " + flowId);
-        }
-
-        SequenceFlow sequenceFlow = modelInstance.newInstance(SequenceFlow.class);
-        sequenceFlow.setId(flowId);
-        setName(sequenceFlow, flow.getName());
-        sequenceFlow.setSource(source);
-        sequenceFlow.setTarget(target);
-
-        String condition = trimToNull(flow.getCondition());
-        if (condition != null) {
-            ConditionExpression conditionExpression = modelInstance.newInstance(ConditionExpression.class);
-            conditionExpression.setTextContent(condition);
-            sequenceFlow.setConditionExpression(conditionExpression);
-        }
-
-        process.addChildElement(sequenceFlow);
-        source.getOutgoing().add(sequenceFlow);
-        target.getIncoming().add(sequenceFlow);
-        return sequenceFlow;
     }
 
     private void applyCamundaModelApiLayout(BpmnModelInstance modelInstance, Process process, Map<String, FlowNode> nodesById, List<SequenceFlow> sequenceFlows) {
@@ -208,12 +176,29 @@ public class JsonToBpmnConverter {
             diagram.setBpmnPlane(plane);
             definitions.addChildElement(diagram);
 
-            Map<String, NodeLayout> nodeLayouts = calculateNodeLayouts(nodesById, sequenceFlows);
+            globalNodeLayouts = calculateNodeLayouts( nodesById, sequenceFlows);
             for (FlowNode node : nodesById.values()) {
-                createBpmnShape(modelInstance, plane, node, nodeLayouts.get(node.getId()));
-            }
+
+    if (node instanceof SubProcess subProcess) {
+
+        createSubProcessDiagram(
+                modelInstance,
+                plane,
+                subProcess
+        );
+
+    } else {
+
+        createBpmnShape(
+                modelInstance,
+                plane,
+                node,
+                globalNodeLayouts.get(node.getId())
+        );
+    }
+}
             for (SequenceFlow sequenceFlow : sequenceFlows) {
-                createBpmnEdge(modelInstance, plane, sequenceFlow, nodeLayouts);
+                createBpmnEdge(modelInstance, plane, sequenceFlow, globalNodeLayouts);
             }
         } catch (BpmnModelException ex) {
             throw new IllegalArgumentException("Unable to generate BPMN diagram layout", ex);
@@ -253,21 +238,130 @@ public class JsonToBpmnConverter {
         }
         return nodeLayouts;
     }
+    private Map<String, NodeLayout> calculateSubProcessLayouts(
+        Map<String, FlowNode> nodesById,
+        List<SequenceFlow> sequenceFlows,
+        SubProcess subProcess
+) {
 
-    private void createBpmnShape(BpmnModelInstance modelInstance, BpmnPlane plane, FlowNode node, NodeLayout layout) {
-        BpmnShape shape = modelInstance.newInstance(BpmnShape.class);
-        shape.setId(node.getId() + "_di");
-        shape.setBpmnElement(node);
+    NodeLayout subLayout = globalNodeLayouts.get(subProcess.getId());
+    if (subLayout == null) {
 
-        Bounds bounds = modelInstance.newInstance(Bounds.class);
-        bounds.setX(layout.x());
-        bounds.setY(layout.y());
-        bounds.setWidth(layout.width());
-        bounds.setHeight(layout.height());
-        shape.setBounds(bounds);
-
-        plane.addChildElement(shape);
+    throw new IllegalArgumentException(
+            "No layout found for subprocess: "
+                    + subProcess.getId()
+    );
     }
+
+    double internalStartX = subLayout.x() + 40;
+    double internalStartY = subLayout.y() + 40;
+
+    Map<String, Integer> levels =
+            new HashMap<>();
+
+    nodesById.keySet().forEach(
+            nodeId -> levels.put(nodeId, 0)
+    );
+
+    for (int i = 0; i < nodesById.size(); i++) {
+
+        boolean changed = false;
+
+        for (SequenceFlow flow : sequenceFlows) {
+
+            String sourceId =
+                    flow.getSource().getId();
+
+            String targetId =
+                    flow.getTarget().getId();
+
+            int candidateLevel =
+                    levels.getOrDefault(sourceId, 0) + 1;
+
+            if (candidateLevel >
+                    levels.getOrDefault(targetId, 0)) {
+
+                levels.put(targetId, candidateLevel);
+
+                changed = true;
+            }
+        }
+
+        if (!changed) {
+            break;
+        }
+    }
+
+    Map<Integer, Integer> rowByLevel =
+            new HashMap<>();
+
+    Map<String, NodeLayout> layouts =
+            new HashMap<>();
+
+    for (FlowNode node : nodesById.values()) {
+
+        int level =
+                levels.getOrDefault(node.getId(), 0);
+
+        int row =
+                rowByLevel.merge(level, 1, Integer::sum) - 1;
+
+        double width = getNodeWidth(node);
+        double height = getNodeHeight(node);
+
+        double x =
+                internalStartX + (level * HORIZONTAL_GAP);
+
+        double y =
+                internalStartY + (row * VERTICAL_GAP);
+
+        layouts.put(
+                node.getId(),
+                new NodeLayout(
+                        x,
+                        y,
+                        width,
+                        height
+                )
+        );
+    }
+
+    return layouts;
+   }
+
+    private void createBpmnShape(
+        BpmnModelInstance modelInstance,
+        BpmnPlane plane,
+        FlowNode node,
+        NodeLayout layout
+) {
+
+    BpmnShape shape =
+            modelInstance.newInstance(BpmnShape.class);
+
+    shape.setId(node.getId() + "_di");
+
+    shape.setBpmnElement(node);
+
+    if (node instanceof SubProcess) {
+
+    shape.setExpanded(false);
+
+    shape.setHorizontal(true);
+}
+
+    Bounds bounds =
+            modelInstance.newInstance(Bounds.class);
+
+    bounds.setX(layout.x());
+    bounds.setY(layout.y());
+    bounds.setWidth(layout.width());
+    bounds.setHeight(layout.height());
+
+    shape.setBounds(bounds);
+
+    plane.addChildElement(shape);
+}
 
     private void createBpmnEdge(BpmnModelInstance modelInstance, BpmnPlane plane, SequenceFlow sequenceFlow, Map<String, NodeLayout> nodeLayouts) {
         NodeLayout sourceLayout = nodeLayouts.get(sequenceFlow.getSource().getId());
@@ -293,6 +387,122 @@ public class JsonToBpmnConverter {
         plane.addChildElement(edge);
     }
 
+    private void createSubProcessDiagram(
+        BpmnModelInstance modelInstance,
+        BpmnPlane plane,
+        SubProcess subProcess
+) {
+
+    Map<String, FlowNode> subNodes =
+            new LinkedHashMap<>();
+
+    List<SequenceFlow> subFlows =
+            new ArrayList<>();
+
+    for (FlowElement element : subProcess.getFlowElements()) {
+
+        if (element instanceof FlowNode node) {
+            subNodes.put(node.getId(), node);
+        }
+
+        if (element instanceof SequenceFlow flow) {
+            subFlows.add(flow);
+        }
+    }
+
+    Map<String, NodeLayout> subLayouts =
+        calculateSubProcessLayouts(
+            subNodes,
+            subFlows,
+            subProcess
+        );
+
+        resizeSubProcessShape(
+            subProcess,
+            subLayouts
+        );
+
+    globalNodeLayouts.putAll(subLayouts);
+    createBpmnShape(
+        modelInstance,
+        plane,
+        subProcess,
+        globalNodeLayouts.get(subProcess.getId())
+);
+
+    for (FlowNode node : subNodes.values()) {
+
+        createBpmnShape(
+                modelInstance,
+                plane,
+                node,
+                subLayouts.get(node.getId())
+        );
+        if (node instanceof SubProcess nestedSubProcess) {
+
+          createSubProcessDiagram(
+            modelInstance,
+            plane,
+            nestedSubProcess
+        );
+}
+    }
+
+    for (SequenceFlow flow : subFlows) {
+
+        createBpmnEdge(
+                modelInstance,
+                plane,
+                flow,
+                subLayouts
+        );
+    }
+    }
+    private void resizeSubProcessShape(
+        SubProcess subProcess,
+        Map<String, NodeLayout> subLayouts
+) {
+
+    NodeLayout currentLayout =
+            globalNodeLayouts.get(subProcess.getId());
+
+    if (currentLayout == null) {
+        return;
+    }
+
+    double maxRight = 0;
+    double maxBottom = 0;
+
+    for (NodeLayout layout : subLayouts.values()) {
+
+        maxRight = Math.max(
+                maxRight,
+                layout.right()
+        );
+
+        maxBottom = Math.max(
+                maxBottom,
+                layout.y() + layout.height()
+        );
+    }
+
+    double newWidth =
+            (maxRight - currentLayout.x()) + 100;
+
+    double newHeight =
+            (maxBottom - currentLayout.y()) + 100;
+
+    globalNodeLayouts.put(
+            subProcess.getId(),
+            new NodeLayout(
+                    currentLayout.x(),
+                    currentLayout.y(),
+                    Math.max(newWidth, 400),
+                    Math.max(newHeight, 250)
+            )
+    );
+}
+
     private void addWaypoint(BpmnModelInstance modelInstance, BpmnEdge edge, double x, double y) {
         Waypoint waypoint = modelInstance.newInstance(Waypoint.class);
         waypoint.setX(x);
@@ -304,8 +514,11 @@ public class JsonToBpmnConverter {
         if (node instanceof StartEvent || node instanceof EndEvent) {
             return EVENT_SIZE;
         }
-        if (node instanceof ExclusiveGateway || node instanceof ParallelGateway || node instanceof InclusiveGateway) {
-            return GATEWAY_SIZE;
+        if (node instanceof SubProcess) {
+           return 400;
+        }
+        if (node instanceof ExclusiveGateway || node instanceof ParallelGateway || node instanceof InclusiveGateway || node instanceof org.camunda.bpm.model.bpmn.instance.EventBasedGateway || node instanceof org.camunda.bpm.model.bpmn.instance.ComplexGateway) {
+           return GATEWAY_SIZE;
         }
         return TASK_WIDTH;
     }
@@ -314,7 +527,10 @@ public class JsonToBpmnConverter {
         if (node instanceof StartEvent || node instanceof EndEvent) {
             return EVENT_SIZE;
         }
-        if (node instanceof ExclusiveGateway || node instanceof ParallelGateway || node instanceof InclusiveGateway) {
+        if (node instanceof SubProcess) {
+            return 250;
+        }
+        if (node instanceof ExclusiveGateway || node instanceof ParallelGateway || node instanceof InclusiveGateway || node instanceof org.camunda.bpm.model.bpmn.instance.EventBasedGateway || node instanceof org.camunda.bpm.model.bpmn.instance.ComplexGateway) {
             return GATEWAY_SIZE;
         }
         return TASK_HEIGHT;
@@ -324,36 +540,10 @@ public class JsonToBpmnConverter {
         return builder;
     }
 
-    private String normalizeFlowId(String id, String from, String to, int position) {
-        String normalized = trimToNull(id);
-        if (normalized != null) {
-            return normalized;
-        }
-        return "flow_" + sanitizeIdPart(from) + "_to_" + sanitizeIdPart(to) + "_" + position;
-    }
-
-    private String sanitizeIdPart(String value) {
-        return value.trim().replaceAll("[^a-zA-Z0-9_]", "_");
-    }
-
-    private void setName(FlowNode node, String name) {
-        String normalized = trimToNull(name);
-        if (normalized != null) {
-            node.setName(normalized);
-        }
-    }
-
     private void setName(Process process, String name) {
         String normalized = trimToNull(name);
         if (normalized != null) {
             process.setName(normalized);
-        }
-    }
-
-    private void setName(SequenceFlow flow, String name) {
-        String normalized = trimToNull(name);
-        if (normalized != null) {
-            flow.setName(normalized);
         }
     }
 

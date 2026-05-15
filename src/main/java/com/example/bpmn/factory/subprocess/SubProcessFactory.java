@@ -8,10 +8,11 @@ import com.example.bpmn.factory.gateway.GatewayFactory;
 import com.example.bpmn.factory.task.TaskFactory;
 import org.camunda.bpm.model.bpmn.BpmnModelInstance;
 import org.camunda.bpm.model.bpmn.instance.FlowNode;
-import org.camunda.bpm.model.bpmn.instance.SequenceFlow;
 import org.camunda.bpm.model.bpmn.instance.SubProcess;
 
+import java.util.Collections;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 public class SubProcessFactory {
@@ -45,7 +46,7 @@ public class SubProcessFactory {
         Map<String, FlowNode> nodesById =
                 new HashMap<>();
 
-        for (ElementDTO child : element.getElements()) {
+        for (ElementDTO child : safeElements(element)) {
 
             FlowNode node =
                     createChildNode(
@@ -59,15 +60,12 @@ public class SubProcessFactory {
 
         for (FlowDTO flow : element.getFlows()) {
 
-            SequenceFlow sequenceFlow =
-                    flowFactory.createSequenceFlow(
-                            modelInstance,
-                            subProcess,
-                            flow,
-                            nodesById
-                    );
-
-            subProcess.addChildElement(sequenceFlow);
+            flowFactory.createSequenceFlow(
+                    modelInstance,
+                    subProcess,
+                    flow,
+                    nodesById
+            );
         }
 
         return subProcess;
@@ -124,7 +122,11 @@ public class SubProcessFactory {
                  "terminateEndEvent",
                  "errorEndEvent",
                  "messageEndEvent",
-                 "signalEndEvent"
+                 "signalEndEvent",
+                 "escalationEndEvent",
+                 "escalationEvent",
+                 "compensationEvent",
+                 "linkEvent"
 
                     -> eventFactory.createEvent(
                             modelInstance,
@@ -163,7 +165,7 @@ public class SubProcessFactory {
     Map<String, FlowNode> nodesById =
             new HashMap<>();
 
-    for (ElementDTO child : element.getElements()) {
+    for (ElementDTO child : safeElements(element)) {
 
         FlowNode node =
                 createChildNode(
@@ -175,7 +177,7 @@ public class SubProcessFactory {
         nodesById.put(child.getId(), node);
     }
 
-    for (FlowDTO flow : element.getFlows()) {
+    for (FlowDTO flow : safeFlows(element)) {
 
         flowFactory.createSequenceFlow(
                 modelInstance,
@@ -187,4 +189,11 @@ public class SubProcessFactory {
 
     return subProcess;
 }
+private List<ElementDTO> safeElements(ElementDTO element) {
+        return element.getElements() == null ? Collections.emptyList() : element.getElements();
+    }
+
+    private List<FlowDTO> safeFlows(ElementDTO element) {
+        return element.getFlows() == null ? Collections.emptyList() : element.getFlows();
+    }
 }

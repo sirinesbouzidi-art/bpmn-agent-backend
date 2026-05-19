@@ -1,7 +1,8 @@
 package com.example.bpmn.factory.event;
-
+ 
 import com.example.bpmn.dto.ElementDTO;
 import org.camunda.bpm.model.bpmn.BpmnModelInstance;
+import org.camunda.bpm.model.bpmn.instance.CancelEventDefinition;
 import org.camunda.bpm.model.bpmn.instance.CompensateEventDefinition;
 import org.camunda.bpm.model.bpmn.instance.ConditionalEventDefinition;
 import org.camunda.bpm.model.bpmn.instance.EndEvent;
@@ -19,421 +20,228 @@ import org.camunda.bpm.model.bpmn.instance.StartEvent;
 import org.camunda.bpm.model.bpmn.instance.SubProcess;
 import org.camunda.bpm.model.bpmn.instance.TerminateEventDefinition;
 import org.camunda.bpm.model.bpmn.instance.TimerEventDefinition;
-
+import org.camunda.bpm.model.bpmn.instance.Transaction;
+ 
 public class EventFactory {
-
+ 
     // =====================================================
-    // EVENTS FOR MAIN PROCESS
+    // PUBLIC — MAIN PROCESS
     // =====================================================
-
+ 
     public FlowNode createEvent(
             BpmnModelInstance modelInstance,
             Process process,
             ElementDTO element
     ) {
-
-        return createEventInternal(
-                modelInstance,
-                process,
-                null,
-                element
-        );
+        return createEventInternal(modelInstance, process, null, null, element);
     }
-
+ 
     // =====================================================
-    // EVENTS FOR SUBPROCESS
+    // PUBLIC — SUBPROCESS
     // =====================================================
-
+ 
     public FlowNode createEvent(
             BpmnModelInstance modelInstance,
             SubProcess subProcess,
             ElementDTO element
     ) {
-
-        return createEventInternal(
-                modelInstance,
-                null,
-                subProcess,
-                element
-        );
+        return createEventInternal(modelInstance, null, subProcess, null, element);
     }
-
+ 
     // =====================================================
-    // COMMON EVENT CREATION
+    // PUBLIC — TRANSACTION (new)
     // =====================================================
-
+ 
+    public FlowNode createEvent(
+            BpmnModelInstance modelInstance,
+            Transaction transaction,
+            ElementDTO element
+    ) {
+        return createEventInternal(modelInstance, null, null, transaction, element);
+    }
+ 
+    // =====================================================
+    // CORE — shared by all three overloads
+    // =====================================================
+ 
     private FlowNode createEventInternal(
             BpmnModelInstance modelInstance,
             Process process,
             SubProcess subProcess,
+            Transaction transaction,
             ElementDTO element
     ) {
-
         String type = element.getType();
-        String id = element.getId();
+        String id   = element.getId();
         String name = element.getName();
-
+ 
         return switch (type) {
-
-            // =========================
-            // START EVENTS
-            // =========================
-
+ 
+            // ── Start Events ──────────────────────────────────────────
             case "startEvent" ->
-                    createNode(
-                            modelInstance,
-                            process,
-                            subProcess,
-                            id,
-                            name,
-                            StartEvent.class
-                    );
-
+                    createNode(modelInstance, process, subProcess, transaction, id, name, StartEvent.class);
+ 
             case "messageStartEvent" ->
-                    createStartEventWithDefinition(
-                            modelInstance,
-                            process,
-                            subProcess,
-                            id,
-                            name,
-                            MessageEventDefinition.class
-                    );
-
+                    createStartEventWithDefinition(modelInstance, process, subProcess, transaction,
+                            id, name, MessageEventDefinition.class);
+ 
             case "timerStartEvent" ->
-                    createStartEventWithDefinition(
-                            modelInstance,
-                            process,
-                            subProcess,
-                            id,
-                            name,
-                            TimerEventDefinition.class
-                    );
-
+                    createStartEventWithDefinition(modelInstance, process, subProcess, transaction,
+                            id, name, TimerEventDefinition.class);
+ 
             case "signalStartEvent" ->
-                    createStartEventWithDefinition(
-                            modelInstance,
-                            process,
-                            subProcess,
-                            id,
-                            name,
-                            SignalEventDefinition.class
-                    );
-
+                    createStartEventWithDefinition(modelInstance, process, subProcess, transaction,
+                            id, name, SignalEventDefinition.class);
+ 
             case "conditionalStartEvent" ->
-                    createStartEventWithDefinition(
-                            modelInstance,
-                            process,
-                            subProcess,
-                            id,
-                            name,
-                            ConditionalEventDefinition.class
-                    );
-
-            // =========================
-            // INTERMEDIATE EVENTS
-            // =========================
-
+                    createStartEventWithDefinition(modelInstance, process, subProcess, transaction,
+                            id, name, ConditionalEventDefinition.class);
+ 
+            // ── Intermediate Events ───────────────────────────────────
             case "intermediateCatchEvent" ->
-                    createNode(
-                            modelInstance,
-                            process,
-                            subProcess,
-                            id,
-                            name,
-                            IntermediateCatchEvent.class
-                    );
-
+                    createNode(modelInstance, process, subProcess, transaction, id, name, IntermediateCatchEvent.class);
+ 
             case "intermediateThrowEvent" ->
-                    createNode(
-                            modelInstance,
-                            process,
-                            subProcess,
-                            id,
-                            name,
-                            IntermediateThrowEvent.class
-                    );
-
+                    createNode(modelInstance, process, subProcess, transaction, id, name, IntermediateThrowEvent.class);
+ 
             case "messageEvent" ->
-                    createIntermediateCatchEventWithDefinition(
-                            modelInstance,
-                            process,
-                            subProcess,
-                            id,
-                            name,
-                            MessageEventDefinition.class
-                    );
-
+                    createIntermediateCatchEventWithDefinition(modelInstance, process, subProcess, transaction,
+                            id, name, MessageEventDefinition.class);
+ 
             case "timerEvent" ->
-                    createIntermediateCatchEventWithDefinition(
-                            modelInstance,
-                            process,
-                            subProcess,
-                            id,
-                            name,
-                            TimerEventDefinition.class
-                    );
-
+                    createIntermediateCatchEventWithDefinition(modelInstance, process, subProcess, transaction,
+                            id, name, TimerEventDefinition.class);
+ 
             case "signalEvent" ->
-                    createIntermediateCatchEventWithDefinition(
-                            modelInstance,
-                            process,
-                            subProcess,
-                            id,
-                            name,
-                            SignalEventDefinition.class
-                    );
-
+                    createIntermediateCatchEventWithDefinition(modelInstance, process, subProcess, transaction,
+                            id, name, SignalEventDefinition.class);
+ 
             case "escalationEvent" ->
-                    createIntermediateThrowEventWithDefinition(
-                            modelInstance,
-                            process,
-                            subProcess,
-                            id,
-                            name,
-                            EscalationEventDefinition.class
-                    );
-
+                    createIntermediateThrowEventWithDefinition(modelInstance, process, subProcess, transaction,
+                            id, name, EscalationEventDefinition.class);
+ 
             case "compensationEvent" ->
-                    createIntermediateThrowEventWithDefinition(
-                            modelInstance,
-                            process,
-                            subProcess,
-                            id,
-                            name,
-                            CompensateEventDefinition.class
-                    );
-
+                    createIntermediateThrowEventWithDefinition(modelInstance, process, subProcess, transaction,
+                            id, name, CompensateEventDefinition.class);
+ 
             case "linkEvent" ->
-                    createIntermediateThrowEventWithDefinition(
-                            modelInstance,
-                            process,
-                            subProcess,
-                            id,
-                            name,
-                            LinkEventDefinition.class
-                    );
-
-            // =========================
-            // END EVENTS
-            // =========================
-
+                    createIntermediateThrowEventWithDefinition(modelInstance, process, subProcess, transaction,
+                            id, name, LinkEventDefinition.class);
+ 
+            // ── End Events ────────────────────────────────────────────
             case "endEvent" ->
-                    createNode(
-                            modelInstance,
-                            process,
-                            subProcess,
-                            id,
-                            name,
-                            EndEvent.class
-                    );
-
+                    createNode(modelInstance, process, subProcess, transaction, id, name, EndEvent.class);
+ 
             case "terminateEndEvent" ->
-                    createEndEventWithDefinition(
-                            modelInstance,
-                            process,
-                            subProcess,
-                            id,
-                            name,
-                            TerminateEventDefinition.class
-                    );
-
+                    createEndEventWithDefinition(modelInstance, process, subProcess, transaction,
+                            id, name, TerminateEventDefinition.class);
+ 
             case "errorEndEvent" ->
-                    createEndEventWithDefinition(
-                            modelInstance,
-                            process,
-                            subProcess,
-                            id,
-                            name,
-                            ErrorEventDefinition.class
-                    );
-
+                    createEndEventWithDefinition(modelInstance, process, subProcess, transaction,
+                            id, name, ErrorEventDefinition.class);
+ 
             case "messageEndEvent" ->
-                    createEndEventWithDefinition(
-                            modelInstance,
-                            process,
-                            subProcess,
-                            id,
-                            name,
-                            MessageEventDefinition.class
-                    );
-
+                    createEndEventWithDefinition(modelInstance, process, subProcess, transaction,
+                            id, name, MessageEventDefinition.class);
+ 
             case "signalEndEvent" ->
-                    createEndEventWithDefinition(
-                            modelInstance,
-                            process,
-                            subProcess,
-                            id,
-                            name,
-                            SignalEventDefinition.class
-                    );
-
+                    createEndEventWithDefinition(modelInstance, process, subProcess, transaction,
+                            id, name, SignalEventDefinition.class);
+ 
             case "escalationEndEvent" ->
-                    createEndEventWithDefinition(
-                            modelInstance,
-                            process,
-                            subProcess,
-                            id,
-                            name,
-                            EscalationEventDefinition.class
-                    );
-
-            default ->
-                    throw new IllegalArgumentException(
-                            "Unsupported event type: " + type
-                    );
+                    createEndEventWithDefinition(modelInstance, process, subProcess, transaction,
+                            id, name, EscalationEventDefinition.class);
+ 
+            // ── Cancel End Event (specific to Transaction SubProcess) ─
+            case "cancelEndEvent" ->
+                    createEndEventWithDefinition(modelInstance, process, subProcess, transaction,
+                            id, name, CancelEventDefinition.class);
+ 
+            default -> throw new IllegalArgumentException("Unsupported event type: " + type);
         };
     }
-
+ 
     // =====================================================
-    // NODE CREATION
+    // NODE CREATION — base method, all parent types
     // =====================================================
-
+ 
     private <T extends FlowNode> T createNode(
             BpmnModelInstance modelInstance,
             Process process,
             SubProcess subProcess,
+            Transaction transaction,
             String id,
             String name,
             Class<T> clazz
     ) {
-
         T node = modelInstance.newInstance(clazz);
-
         node.setId(id);
         node.setName(name);
-
-        if (process != null) {
-            process.addChildElement(node);
-        }
-
-        if (subProcess != null) {
-            subProcess.addChildElement(node);
-        }
-
+ 
+        if (process != null)     { process.addChildElement(node); }
+        if (subProcess != null)  { subProcess.addChildElement(node); }
+        if (transaction != null) { transaction.addChildElement(node); }
+ 
         return node;
     }
-
+ 
     // =====================================================
-    // START EVENTS
+    // START EVENTS WITH DEFINITION
     // =====================================================
-
-    private <T extends EventDefinition>
-    StartEvent createStartEventWithDefinition(
+ 
+    private <T extends EventDefinition> StartEvent createStartEventWithDefinition(
             BpmnModelInstance modelInstance,
-            Process process,
-            SubProcess subProcess,
-            String id,
-            String name,
-            Class<T> definitionClass
+            Process process, SubProcess subProcess, Transaction transaction,
+            String id, String name, Class<T> definitionClass
     ) {
-
-        StartEvent event =
-                createNode(
-                        modelInstance,
-                        process,
-                        subProcess,
-                        id,
-                        name,
-                        StartEvent.class
-                );
-
-        T definition = modelInstance.newInstance(definitionClass);
-
-        event.addChildElement(definition);
-
+        StartEvent event = createNode(modelInstance, process, subProcess, transaction,
+                id, name, StartEvent.class);
+        event.addChildElement(modelInstance.newInstance(definitionClass));
         return event;
     }
-
+ 
     // =====================================================
-    // INTERMEDIATE CATCH EVENTS
+    // INTERMEDIATE CATCH EVENTS WITH DEFINITION
     // =====================================================
-
-    private <T extends EventDefinition>
-    IntermediateCatchEvent createIntermediateCatchEventWithDefinition(
+ 
+    private <T extends EventDefinition> IntermediateCatchEvent createIntermediateCatchEventWithDefinition(
             BpmnModelInstance modelInstance,
-            Process process,
-            SubProcess subProcess,
-            String id,
-            String name,
-            Class<T> definitionClass
+            Process process, SubProcess subProcess, Transaction transaction,
+            String id, String name, Class<T> definitionClass
     ) {
-
-        IntermediateCatchEvent event =
-                createNode(
-                        modelInstance,
-                        process,
-                        subProcess,
-                        id,
-                        name,
-                        IntermediateCatchEvent.class
-                );
-
-        T definition = modelInstance.newInstance(definitionClass);
-
-        event.addChildElement(definition);
-
+        IntermediateCatchEvent event = createNode(modelInstance, process, subProcess, transaction,
+                id, name, IntermediateCatchEvent.class);
+        event.addChildElement(modelInstance.newInstance(definitionClass));
         return event;
     }
-
+ 
     // =====================================================
-    // INTERMEDIATE THROW EVENTS
+    // INTERMEDIATE THROW EVENTS WITH DEFINITION
     // =====================================================
-
-    private <T extends EventDefinition>
-    IntermediateThrowEvent createIntermediateThrowEventWithDefinition(
+ 
+    private <T extends EventDefinition> IntermediateThrowEvent createIntermediateThrowEventWithDefinition(
             BpmnModelInstance modelInstance,
-            Process process,
-            SubProcess subProcess,
-            String id,
-            String name,
-            Class<T> definitionClass
+            Process process, SubProcess subProcess, Transaction transaction,
+            String id, String name, Class<T> definitionClass
     ) {
-
-        IntermediateThrowEvent event =
-                createNode(
-                        modelInstance,
-                        process,
-                        subProcess,
-                        id,
-                        name,
-                        IntermediateThrowEvent.class
-                );
-
-        T definition = modelInstance.newInstance(definitionClass);
-
-        event.addChildElement(definition);
-
+        IntermediateThrowEvent event = createNode(modelInstance, process, subProcess, transaction,
+                id, name, IntermediateThrowEvent.class);
+        event.addChildElement(modelInstance.newInstance(definitionClass));
         return event;
     }
-
+ 
     // =====================================================
-    // END EVENTS
+    // END EVENTS WITH DEFINITION
     // =====================================================
-
-    private <T extends EventDefinition>
-    EndEvent createEndEventWithDefinition(
+ 
+    private <T extends EventDefinition> EndEvent createEndEventWithDefinition(
             BpmnModelInstance modelInstance,
-            Process process,
-            SubProcess subProcess,
-            String id,
-            String name,
-            Class<T> definitionClass
+            Process process, SubProcess subProcess, Transaction transaction,
+            String id, String name, Class<T> definitionClass
     ) {
-
-        EndEvent event =
-                createNode(
-                        modelInstance,
-                        process,
-                        subProcess,
-                        id,
-                        name,
-                        EndEvent.class
-                );
-
-        T definition = modelInstance.newInstance(definitionClass);
-
-        event.addChildElement(definition);
-
+        EndEvent event = createNode(modelInstance, process, subProcess, transaction,
+                id, name, EndEvent.class);
+        event.addChildElement(modelInstance.newInstance(definitionClass));
         return event;
     }
 }

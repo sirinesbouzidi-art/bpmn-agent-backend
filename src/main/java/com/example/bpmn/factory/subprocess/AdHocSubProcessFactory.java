@@ -6,79 +6,99 @@ import com.example.bpmn.factory.event.EventFactory;
 import com.example.bpmn.factory.flow.FlowFactory;
 import com.example.bpmn.factory.gateway.GatewayFactory;
 import com.example.bpmn.factory.task.TaskFactory;
+
 import org.camunda.bpm.model.bpmn.BpmnModelInstance;
 import org.camunda.bpm.model.bpmn.instance.FlowNode;
+import org.camunda.bpm.model.bpmn.instance.Process;
 import org.camunda.bpm.model.bpmn.instance.SubProcess;
-import com.example.bpmn.factory.transaction.TransactionFactory;
-import com.example.bpmn.factory.subprocess.AdHocSubProcessFactory;
-import com.example.bpmn.factory.subprocess.CallActivityFactory;
-import com.example.bpmn.factory.subprocess.EventSubProcessFactory;
+import org.camunda.bpm.model.bpmn.instance.Transaction;
 
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-public class SubProcessFactory {
+public class AdHocSubProcessFactory {
 
     private final TaskFactory taskFactory = new TaskFactory();
     private final GatewayFactory gatewayFactory = new GatewayFactory();
     private final EventFactory eventFactory = new EventFactory();
     private final FlowFactory flowFactory = new FlowFactory();
-    private final CallActivityFactory callActivityFactory = new CallActivityFactory();
-    private final EventSubProcessFactory eventSubProcessFactory = new EventSubProcessFactory();
-    private final TransactionFactory transactionFactory = new TransactionFactory();
-    private final AdHocSubProcessFactory adHocSubProcessFactory = new AdHocSubProcessFactory();
 
     // =====================================================
-    // SUBPROCESS FOR MAIN PROCESS
+    // MAIN PROCESS
     // =====================================================
 
-    public FlowNode createSubProcess(
+    public FlowNode createAdHocSubProcess(
             BpmnModelInstance modelInstance,
-            org.camunda.bpm.model.bpmn.instance.Process process,
+            Process process,
             ElementDTO element
     ) {
-        SubProcess subProcess = modelInstance.newInstance(SubProcess.class);
-        subProcess.setId(element.getId());
-        subProcess.setName(element.getName());
-
+        validateAdHocSubProcess(element);
+        SubProcess subProcess = createShell(modelInstance, element);
         process.addChildElement(subProcess);
-
-        Map<String, FlowNode> nodesById = new HashMap<>();
-
-        for (ElementDTO child : safeElements(element)) {
-            // FIX 1: was createNestedChildNode(modelInstance, nested, child)
-            //        "nested" variable does not exist in this scope.
-            //        Correct call: createChildNode(modelInstance, subProcess, child)
-            FlowNode node = createChildNode(modelInstance, subProcess, child);
-            nodesById.put(child.getId(), node);
-        }
-
-        // FIX 2: was element.getFlows() — throws NPE when flows is null.
-        //        Use safeFlows(element) consistent with the nested overload below.
-        for (FlowDTO flow : safeFlows(element)) {
-            flowFactory.createSequenceFlow(modelInstance, subProcess, flow, nodesById);
-        }
-
+        populate(modelInstance, subProcess, element);
         return subProcess;
     }
 
     // =====================================================
-    // SUBPROCESS FOR PARENT SUBPROCESS (nested)
+    // PARENT SUBPROCESS
     // =====================================================
 
-    public FlowNode createSubProcess(
+    public FlowNode createAdHocSubProcess(
             BpmnModelInstance modelInstance,
             SubProcess parentSubProcess,
+            ElementDTO element
+    ) {
+        validateAdHocSubProcess(element);
+        SubProcess subProcess = createShell(modelInstance, element);
+        parentSubProcess.addChildElement(subProcess);
+        populate(modelInstance, subProcess, element);
+        return subProcess;
+    }
+
+    // =====================================================
+    // PARENT TRANSACTION
+    // FIX: this overload was missing — TransactionFactory calls
+    //      createAdHocSubProcess(modelInstance, Transaction, element)
+    //      but no such signature existed, causing the compilation error.
+    // =====================================================
+
+    public FlowNode createAdHocSubProcess(
+            BpmnModelInstance modelInstance,
+            Transaction parentTransaction,
+            ElementDTO element
+    ) {
+        validateAdHocSubProcess(element);
+        SubProcess subProcess = createShell(modelInstance, element);
+        parentTransaction.addChildElement(subProcess);
+        populate(modelInstance, subProcess, element);
+        return subProcess;
+    }
+
+    // =====================================================
+    // CREATE SHELL
+    // =====================================================
+
+    private SubProcess createShell(
+            BpmnModelInstance modelInstance,
             ElementDTO element
     ) {
         SubProcess subProcess = modelInstance.newInstance(SubProcess.class);
         subProcess.setId(element.getId());
         subProcess.setName(element.getName());
+        return subProcess;
+    }
 
-        parentSubProcess.addChildElement(subProcess);
+    // =====================================================
+    // POPULATE
+    // =====================================================
 
+    private void populate(
+            BpmnModelInstance modelInstance,
+            SubProcess subProcess,
+            ElementDTO element
+    ) {
         Map<String, FlowNode> nodesById = new HashMap<>();
 
         for (ElementDTO child : safeElements(element)) {
@@ -89,8 +109,6 @@ public class SubProcessFactory {
         for (FlowDTO flow : safeFlows(element)) {
             flowFactory.createSequenceFlow(modelInstance, subProcess, flow, nodesById);
         }
-
-        return subProcess;
     }
 
     // =====================================================
@@ -104,7 +122,22 @@ public class SubProcessFactory {
     ) {
         String type = element.getType();
 
+        // =====================================================
+        // BPMN CONSTRAINT:
+        // ADHOC SUBPROCESS CANNOT CONTAIN START EVENTS OR END EVENTS
+        // =====================================================
+
+        if ("startEvent".equals(type)
+                || "endEvent".equals(type)
+                || type.endsWith("StartEvent")
+                || type.endsWith("EndEvent")) {
+            throw new IllegalArgumentException(
+                    "AdHocSubProcess cannot contain start/end events");
+        }
+
         return switch (type) {
+
+            // TASKS
             case "userTask",
                  "serviceTask",
                  "scriptTask",
@@ -114,6 +147,7 @@ public class SubProcessFactory {
                  "receiveTask"
                     -> taskFactory.createTask(modelInstance, subProcess, element);
 
+            // GATEWAYS
             case "exclusiveGateway",
                  "parallelGateway",
                  "inclusiveGateway",
@@ -121,45 +155,40 @@ public class SubProcessFactory {
                  "complexGateway"
                     -> gatewayFactory.createGateway(modelInstance, subProcess, element);
 
-            case "startEvent",
-                 "messageStartEvent",
-                 "timerStartEvent",
-                 "signalStartEvent",
-                 "conditionalStartEvent",
-                 "intermediateCatchEvent",
+            // INTERMEDIATE EVENTS ONLY
+            case "intermediateCatchEvent",
                  "intermediateThrowEvent",
                  "messageEvent",
                  "timerEvent",
                  "signalEvent",
-                 "endEvent",
-                 "terminateEndEvent",
-                 "errorEndEvent",
-                 "messageEndEvent",
-                 "signalEndEvent",
-                 "escalationEndEvent",
                  "escalationEvent",
                  "compensationEvent",
                  "linkEvent"
                     -> eventFactory.createEvent(modelInstance, subProcess, element);
 
+            // NORMAL SUBPROCESS
             case "subProcess"
-                    -> createSubProcess(modelInstance, subProcess, element);
+                    -> new SubProcessFactory().createSubProcess(modelInstance, subProcess, element);
 
-            case "callActivity"
-                    -> callActivityFactory.createCallActivity(modelInstance, subProcess, element);
-
-            case "eventSubProcess"
-                    -> eventSubProcessFactory.createEventSubProcess(modelInstance, subProcess, element);
-
-            case "transaction"
-                    -> transactionFactory.createTransaction(modelInstance, subProcess, element);
-
+            // NESTED ADHOC SUBPROCESS
             case "adHocSubProcess"
-                    -> adHocSubProcessFactory.createAdHocSubProcess(modelInstance, subProcess, element);
+                    -> createAdHocSubProcess(modelInstance, subProcess, element);
 
             default -> throw new IllegalArgumentException(
-                    "Unsupported subprocess element type: " + type);
+                    "Unsupported AdHoc child type: " + type);
         };
+    }
+
+    // =====================================================
+    // VALIDATION
+    // =====================================================
+
+    private void validateAdHocSubProcess(ElementDTO element) {
+        // BPMN RULE: MUST CONTAIN AT LEAST ONE ACTIVITY
+        if (safeElements(element).isEmpty()) {
+            throw new IllegalArgumentException(
+                    "AdHocSubProcess must contain at least one activity");
+        }
     }
 
     // =====================================================

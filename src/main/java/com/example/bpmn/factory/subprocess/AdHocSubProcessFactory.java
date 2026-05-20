@@ -13,6 +13,7 @@ import org.camunda.bpm.model.bpmn.instance.Process;
 import org.camunda.bpm.model.bpmn.instance.SubProcess;
 import org.camunda.bpm.model.bpmn.instance.Transaction;
 
+
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
@@ -35,10 +36,10 @@ public class AdHocSubProcessFactory {
             ElementDTO element
     ) {
         validateAdHocSubProcess(element);
-        SubProcess subProcess = createShell(modelInstance, element);
-        process.addChildElement(subProcess);
-        populate(modelInstance, subProcess, element);
-        return subProcess;
+        SubProcess adHocSubProcess = createShell(modelInstance, element);
+        process.addChildElement(adHocSubProcess);
+        populate(modelInstance, adHocSubProcess, element);
+        return adHocSubProcess;
     }
 
     // =====================================================
@@ -51,10 +52,10 @@ public class AdHocSubProcessFactory {
             ElementDTO element
     ) {
         validateAdHocSubProcess(element);
-        SubProcess subProcess = createShell(modelInstance, element);
-        parentSubProcess.addChildElement(subProcess);
-        populate(modelInstance, subProcess, element);
-        return subProcess;
+        SubProcess adHocSubProcess = createShell(modelInstance, element);
+        parentSubProcess.addChildElement(adHocSubProcess);
+        populate(modelInstance, adHocSubProcess, element);
+        return adHocSubProcess;
     }
 
     // =====================================================
@@ -70,10 +71,10 @@ public class AdHocSubProcessFactory {
             ElementDTO element
     ) {
         validateAdHocSubProcess(element);
-        SubProcess subProcess = createShell(modelInstance, element);
-        parentTransaction.addChildElement(subProcess);
-        populate(modelInstance, subProcess, element);
-        return subProcess;
+        SubProcess adHocSubProcess = createShell(modelInstance, element);
+        parentTransaction.addChildElement(adHocSubProcess);
+        populate(modelInstance, adHocSubProcess, element);
+        return adHocSubProcess;
     }
 
     // =====================================================

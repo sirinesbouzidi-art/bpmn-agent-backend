@@ -1,6 +1,7 @@
 package com.example.bpmn.exception;
 
 import jakarta.servlet.http.HttpServletRequest;
+import org.springframework.http.MediaType;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.validation.FieldError;
@@ -83,13 +84,22 @@ public class GlobalExceptionHandler {
         return ResponseEntity.badRequest().body(error);
     }
     @ExceptionHandler(IllegalArgumentException.class)
-    public ResponseEntity<ApiErrorResponse> handleIllegalArgument(IllegalArgumentException ex, HttpServletRequest request) {
+        public ResponseEntity<?> handleIllegalArgument(IllegalArgumentException ex, HttpServletRequest request) {
         ApiErrorResponse error = new ApiErrorResponse(
                 HttpStatus.BAD_REQUEST.value(),
                 HttpStatus.BAD_REQUEST.getReasonPhrase(),
                 ex.getMessage(),
                 request.getRequestURI()
         );
+        String accept = request.getHeader("Accept");
+        if (accept != null && accept.contains(MediaType.APPLICATION_XML_VALUE)) {
+            String xml = "<error>"
+                    + "<status>" + error.getStatus() + "</status>"
+                    + "<message>" + escapeXml(error.getMessage()) + "</message>"
+                    + "<path>" + escapeXml(error.getPath()) + "</path>"
+                    + "</error>";
+            return ResponseEntity.badRequest().contentType(MediaType.APPLICATION_XML).body(xml);
+        }
         return ResponseEntity.badRequest().body(error);
     }
     @ExceptionHandler(CamundaIntegrationException.class)
@@ -103,5 +113,16 @@ public class GlobalExceptionHandler {
                 request.getRequestURI()
         );
         return ResponseEntity.status(status).body(error);
+    }
+private String escapeXml(String value) {
+        if (value == null) {
+            return "";
+        }
+        return value
+                .replace("&", "&amp;")
+                .replace("<", "&lt;")
+                .replace(">", "&gt;")
+                .replace("\"", "&quot;")
+                .replace("'", "&apos;");
     }
 }

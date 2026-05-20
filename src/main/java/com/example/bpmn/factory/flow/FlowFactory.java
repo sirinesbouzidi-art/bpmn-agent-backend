@@ -3,12 +3,23 @@ package com.example.bpmn.factory.flow;
 import com.example.bpmn.dto.FlowDTO;
 import org.camunda.bpm.model.bpmn.BpmnModelInstance;
 import org.camunda.bpm.model.bpmn.instance.ConditionExpression;
+import org.camunda.bpm.model.bpmn.instance.DataInputAssociation;
+import org.camunda.bpm.model.bpmn.instance.DataOutputAssociation;
 import org.camunda.bpm.model.bpmn.instance.ExclusiveGateway;
 import org.camunda.bpm.model.bpmn.instance.FlowNode;
+import org.camunda.bpm.model.bpmn.instance.ItemAwareElement;
+import org.camunda.bpm.model.bpmn.instance.MessageFlow;
 import org.camunda.bpm.model.bpmn.instance.Process;
 import org.camunda.bpm.model.bpmn.instance.SequenceFlow;
 import org.camunda.bpm.model.bpmn.instance.SubProcess;
 import org.camunda.bpm.model.bpmn.instance.Transaction; 
+import org.camunda.bpm.model.bpmn.instance.Association;
+import org.camunda.bpm.model.bpmn.instance.BaseElement;
+import org.camunda.bpm.model.bpmn.AssociationDirection;
+import org.camunda.bpm.model.bpmn.instance.InteractionNode;
+import org.camunda.bpm.model.bpmn.instance.Activity;
+
+
  
 import java.nio.charset.StandardCharsets;
 import java.util.Map;
@@ -17,6 +28,33 @@ import java.util.regex.Pattern;
  
 public class FlowFactory {
     private static final Pattern NON_ID_CHARACTER = Pattern.compile("[^A-Za-z0-9_.-]");
+    public MessageFlow createMessageFlow(BpmnModelInstance modelInstance, BaseElement container, FlowDTO flow, Map<String, BaseElement> elementsById) {
+        MessageFlow messageFlow = modelInstance.newInstance(MessageFlow.class);
+        messageFlow.setId(resolveFlowId(modelInstance, flow, flow.getFrom(), flow.getTo()));
+        if (flow.getName() != null) messageFlow.setName(flow.getName());
+        BaseElement source = requireElement(elementsById, flow.getFrom(), "messageFlow source");
+        BaseElement target = requireElement(elementsById, flow.getTo(), "messageFlow target");
+        if (!(source instanceof InteractionNode src)) throw new IllegalArgumentException("messageFlow source must be InteractionNode: " + flow.getFrom());
+        if (!(target instanceof InteractionNode tgt)) throw new IllegalArgumentException("messageFlow target must be InteractionNode: " + flow.getTo());
+        messageFlow.setSource(src);
+        messageFlow.setTarget(tgt);
+        container.addChildElement(messageFlow);
+        return messageFlow;
+    }
+
+    public Association createAssociation(BpmnModelInstance modelInstance, BaseElement container, FlowDTO flow, Map<String, BaseElement> elementsById) {
+        Association association = modelInstance.newInstance(Association.class);
+        association.setId(resolveFlowId(modelInstance, flow, flow.getFrom(), flow.getTo()));
+        BaseElement source = requireElement(elementsById, flow.getFrom(), "association source");
+        BaseElement target = requireElement(elementsById, flow.getTo(), "association target");
+        association.setSource(source);
+        association.setTarget(target);
+        association.setAssociationDirection(AssociationDirection.None);
+        container.addChildElement(association);
+        return association;
+    }
+
+   
  
     // ── Existing overload — Process ──────────────────────────────────
     public SequenceFlow createSequenceFlow(
@@ -127,6 +165,11 @@ public class FlowFactory {
                 .toString()
                 .substring(0, 8);
         return uniqueId(modelInstance, "flow_" + sourceId + "_" + targetId + "_" + fingerprint);
+    }
+    private BaseElement requireElement(Map<String, BaseElement> elementsById, String id, String role) {
+        BaseElement element = elementsById.get(id);
+        if (element == null) throw new IllegalArgumentException("Unknown " + role + ": " + id);
+        return element;
     }
  
     private String uniqueId(BpmnModelInstance modelInstance, String requestedId) {

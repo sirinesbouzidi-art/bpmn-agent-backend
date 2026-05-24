@@ -10,6 +10,7 @@ import com.example.bpmn.factory.gateway.GatewayFactory;
 import com.example.bpmn.factory.subprocess.SubProcessFactory;
 import com.example.bpmn.factory.task.TaskFactory;
 import org.camunda.bpm.model.bpmn.Bpmn;
+import org.camunda.bpm.model.bpmn.AssociationDirection;
 import org.camunda.bpm.model.bpmn.BpmnModelException;
 import org.camunda.bpm.model.bpmn.BpmnModelInstance;
 import org.camunda.bpm.model.bpmn.builder.AbstractFlowNodeBuilder;
@@ -195,13 +196,17 @@ public class JsonToBpmnConverter {
             switch (flowType) {
                 case "sequenceFlow" -> sequenceFlows.add(flowFactory.createSequenceFlow(modelInstance, process, flow, nodesById));
                 case "messageFlow" -> nonSequenceFlows.add(flowFactory.createMessageFlow(modelInstance, ensureCollaboration(modelInstance, definitions, process), flow, elementsById));
-                case "association" -> nonSequenceFlows.add(flowFactory.createAssociation(modelInstance, process, flow, elementsById));
+                case "association" -> nonSequenceFlows.add(flowFactory.createAssociation(modelInstance, process, flow, elementsById, AssociationDirection.None));
+                case "associationOne" -> nonSequenceFlows.add(flowFactory.createAssociation(modelInstance, process, flow, elementsById, AssociationDirection.One));
+                case "associationBoth" -> nonSequenceFlows.add(flowFactory.createAssociation(modelInstance, process, flow, elementsById, AssociationDirection.Both));
+                case "dataInputAssociation" -> nonSequenceFlows.add(flowFactory.createDataInputAssociation(modelInstance, flow, elementsById));
+                case "dataOutputAssociation" -> nonSequenceFlows.add(flowFactory.createDataOutputAssociation(modelInstance, flow, elementsById));
                 
                 default -> throw new IllegalArgumentException("Unsupported BPMN flow type: " + flowType);
             }
         }
 
-        applyCamundaModelApiLayout(modelInstance, process, nodesById, sequenceFlows, nonSequenceFlows);
+        applyCamundaModelApiLayout(modelInstance, process, nodesById, elementsById, sequenceFlows, nonSequenceFlows);
         Bpmn.validateModel(modelInstance);
         return writeModelToString(modelInstance);
     }
@@ -328,6 +333,7 @@ public class JsonToBpmnConverter {
             BpmnModelInstance modelInstance,
             Process process,
             Map<String, FlowNode> nodesById,
+            Map<String, BaseElement> elementsById,
             List<SequenceFlow> sequenceFlows,
             List<BaseElement> extraEdges
     ) {
@@ -361,18 +367,28 @@ public class JsonToBpmnConverter {
             diagram.setId(stableDiId("BPMNDiagram", process.getId(), modelInstance, usedDiIds));
             BpmnPlane plane = modelInstance.newInstance(BpmnPlane.class);
             plane.setId(stableDiId("BPMNPlane", process.getId(), modelInstance, usedDiIds));
-            plane.setBpmnElement(process);
+            Collaboration collaboration = definitions.getChildElementsByType(Collaboration.class).stream().findFirst().orElse(null);
+            boolean hasMessageFlow = extraEdges.stream().anyMatch(MessageFlow.class::isInstance);
+            plane.setBpmnElement(hasMessageFlow && collaboration != null ? collaboration : process);
             diagram.setBpmnPlane(plane);
             definitions.addChildElement(diagram);
 
+            Map<String, NodeLayout> allLayouts = new LinkedHashMap<>(nodeLayouts);
+            allLayouts.putAll(computeArtifactLayouts(elementsById, extraEdges, nodeLayouts));
+
             for (FlowNode node : nodesById.values()) {
-                createBpmnShape(modelInstance, plane, node, nodeLayouts.get(node.getId()), usedDiIds);
+                createBpmnShape(modelInstance, plane, node, allLayouts.get(node.getId()), usedDiIds);
+            }
+            for (BaseElement element : elementsById.values()) {
+                if (!(element instanceof FlowNode) && allLayouts.containsKey(element.getId())) {
+                    createBpmnShape(modelInstance, plane, element, allLayouts.get(element.getId()), usedDiIds);
+                }
             }
             for (SequenceFlow sequenceFlow : sequenceFlows) {
-                createBpmnEdgeRouted(modelInstance, plane, sequenceFlow, nodeLayouts, usedDiIds);
+                createBpmnEdgeRouted(modelInstance, plane, sequenceFlow, allLayouts, usedDiIds);
             }
             for (BaseElement edge : extraEdges) {
-                createGenericBpmnEdge(modelInstance, plane, edge, nodeLayouts, usedDiIds);
+                createGenericBpmnEdge(modelInstance, plane, edge, allLayouts, usedDiIds);
             }
             renderExpandedAdHocContents(modelInstance, plane, nodesById.values(), nodeLayouts, usedDiIds);
 
@@ -1065,7 +1081,49 @@ for (int levelIdx = 0; levelIdx < sortedLevels.size() - 1; levelIdx++) {
         shape.setBounds(bounds);
         plane.addChildElement(shape);
     }
-     private void renderExpandedAdHocContents(
+     private void createBpmnShape(
+            BpmnModelInstance modelInstance,
+            BpmnPlane plane,
+            BaseElement element,
+            NodeLayout layout,
+            Set<String> usedDiIds) {
+
+        if (layout == null) return;
+        BpmnShape shape = modelInstance.newInstance(BpmnShape.class);
+        shape.setId(stableDiId("BPMNShape", element.getId(), modelInstance, usedDiIds));
+        shape.setBpmnElement(element);
+        Bounds bounds = modelInstance.newInstance(Bounds.class);
+        bounds.setX(layout.x());
+        bounds.setY(layout.y());
+        bounds.setWidth(layout.width());
+        bounds.setHeight(layout.height());
+        shape.setBounds(bounds);
+        plane.addChildElement(shape);
+    }
+
+    private Map<String, NodeLayout> computeArtifactLayouts(Map<String, BaseElement> elementsById, List<BaseElement> extraEdges, Map<String, NodeLayout> nodeLayouts) {
+        Map<String, NodeLayout> artifactLayouts = new LinkedHashMap<>();
+        for (BaseElement edge : extraEdges) {
+            if (!(edge instanceof Association association)) continue;
+            BaseElement source = association.getSource();
+            BaseElement target = association.getTarget();
+            if (source == null || target == null) continue;
+            if (source instanceof FlowNode && !(target instanceof FlowNode) && elementsById.containsKey(target.getId())) {
+                NodeLayout src = nodeLayouts.get(source.getId());
+                if (src != null && !artifactLayouts.containsKey(target.getId())) {
+                    artifactLayouts.put(target.getId(), new NodeLayout(src.right() + 60, src.y() - 20, 140, 50));
+                }
+            }
+            if (target instanceof FlowNode && !(source instanceof FlowNode) && elementsById.containsKey(source.getId())) {
+                NodeLayout tgt = nodeLayouts.get(target.getId());
+                if (tgt != null && !artifactLayouts.containsKey(source.getId())) {
+                    artifactLayouts.put(source.getId(), new NodeLayout(tgt.x() - 200, tgt.y() - 20, 140, 50));
+                }
+            }
+        }
+        return artifactLayouts;
+    }
+    private void renderExpandedAdHocContents(
             BpmnModelInstance modelInstance,
             BpmnPlane plane,
             Collection<FlowNode> nodes,
@@ -1304,8 +1362,7 @@ for (int levelIdx = 0; levelIdx < sortedLevels.size() - 1; levelIdx++) {
 
    
 
-    private void createGenericBpmnEdge(BpmnModelInstance modelInstance, BpmnPlane plane, BaseElement edgeElement,
-                                       Map<String, NodeLayout> nodeLayouts, Set<String> usedDiIds) {
+   private void createGenericBpmnEdge(BpmnModelInstance modelInstance, BpmnPlane plane, BaseElement edgeElement, Map<String, NodeLayout> nodeLayouts, Set<String> usedDiIds) {
         String sourceId = null;
         String targetId = null;
         if (edgeElement instanceof MessageFlow flow) {
@@ -1328,7 +1385,17 @@ for (int levelIdx = 0; levelIdx < sortedLevels.size() - 1; levelIdx++) {
         BpmnEdge edge = modelInstance.newInstance(BpmnEdge.class);
         edge.setId(stableDiId("BPMNEdge", edgeElement.getId(), modelInstance, usedDiIds));
         edge.setBpmnElement(edgeElement);
-        routeForwardEdge(modelInstance, edge, sourceLayout, targetLayout, nodeLayouts);
+
+        boolean isForward = targetLayout.x() >= sourceLayout.right();
+        boolean isLoop    = targetLayout.right() <= sourceLayout.x() + 10;
+
+        if (isLoop) {
+            routeLoopEdge(modelInstance, edge, sourceLayout, targetLayout, nodeLayouts);
+        } else if (isForward) {
+            routeForwardEdge(modelInstance, edge, sourceLayout, targetLayout, nodeLayouts);
+        } else {
+            routeAroundEdge(modelInstance, edge, sourceLayout, targetLayout, nodeLayouts);
+        }
         plane.addChildElement(edge);
     }
 

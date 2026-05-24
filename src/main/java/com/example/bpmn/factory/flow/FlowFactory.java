@@ -19,8 +19,6 @@ import org.camunda.bpm.model.bpmn.AssociationDirection;
 import org.camunda.bpm.model.bpmn.instance.InteractionNode;
 import org.camunda.bpm.model.bpmn.instance.Activity;
 
-
- 
 import java.nio.charset.StandardCharsets;
 import java.util.Map;
 import java.util.UUID;
@@ -42,19 +40,43 @@ public class FlowFactory {
         return messageFlow;
     }
 
-    public Association createAssociation(BpmnModelInstance modelInstance, BaseElement container, FlowDTO flow, Map<String, BaseElement> elementsById) {
+        public DataInputAssociation createDataInputAssociation(BpmnModelInstance modelInstance, FlowDTO flow, Map<String, BaseElement> elementsById) {
+        BaseElement source = requireElement(elementsById, flow.getFrom(), "dataInputAssociation source");
+        BaseElement target = requireElement(elementsById, flow.getTo(), "dataInputAssociation target");
+        if (!(source instanceof ItemAwareElement sourceItem)) throw new IllegalArgumentException("dataInputAssociation source must be ItemAwareElement: " + flow.getFrom());
+        if (!(target instanceof Activity activityTarget)) throw new IllegalArgumentException("dataInputAssociation target must be Activity: " + flow.getTo());
+
+        DataInputAssociation association = modelInstance.newInstance(DataInputAssociation.class);
+        association.setId(resolveFlowId(modelInstance, flow, flow.getFrom(), flow.getTo()));
+        association.getSources().add(sourceItem);
+        activityTarget.getDataInputAssociations().add(association);
+        return association;
+    }
+
+    public DataOutputAssociation createDataOutputAssociation(BpmnModelInstance modelInstance, FlowDTO flow, Map<String, BaseElement> elementsById) {
+        BaseElement source = requireElement(elementsById, flow.getFrom(), "dataOutputAssociation source");
+        BaseElement target = requireElement(elementsById, flow.getTo(), "dataOutputAssociation target");
+        if (!(source instanceof Activity activitySource)) throw new IllegalArgumentException("dataOutputAssociation source must be Activity: " + flow.getFrom());
+        if (!(target instanceof ItemAwareElement targetItem)) throw new IllegalArgumentException("dataOutputAssociation target must be ItemAwareElement: " + flow.getTo());
+
+        DataOutputAssociation association = modelInstance.newInstance(DataOutputAssociation.class);
+        association.setId(resolveFlowId(modelInstance, flow, flow.getFrom(), flow.getTo()));
+        association.setTarget(targetItem);
+        activitySource.getDataOutputAssociations().add(association);
+        return association;
+    }
+
+    public Association createAssociation(BpmnModelInstance modelInstance, BaseElement container, FlowDTO flow, Map<String, BaseElement> elementsById, AssociationDirection direction) {
         Association association = modelInstance.newInstance(Association.class);
         association.setId(resolveFlowId(modelInstance, flow, flow.getFrom(), flow.getTo()));
         BaseElement source = requireElement(elementsById, flow.getFrom(), "association source");
         BaseElement target = requireElement(elementsById, flow.getTo(), "association target");
         association.setSource(source);
         association.setTarget(target);
-        association.setAssociationDirection(AssociationDirection.None);
+        association.setAssociationDirection(direction == null ? AssociationDirection.None : direction);
         container.addChildElement(association);
         return association;
     }
-
-   
  
     // ── Existing overload — Process ──────────────────────────────────
     public SequenceFlow createSequenceFlow(

@@ -874,6 +874,10 @@ for (int levelIdx = 0; levelIdx < sortedLevels.size() - 1; levelIdx++) {
         Map<String, Integer> levels   = new HashMap<>();
         Map<String, Integer> indegree = new HashMap<>();
         Queue<String> ready           = new ArrayDeque<>();
+        Set<String> visited           = new HashSet<>();
+        Set<String> loopEdges         = new HashSet<>();
+
+
 
         for (String nodeId : nodeIds) {
             levels.put(nodeId, 0);
@@ -882,30 +886,34 @@ for (int levelIdx = 0; levelIdx < sortedLevels.size() - 1; levelIdx++) {
             if (inCount == 0) ready.add(nodeId);
         }
 
-        while (!ready.isEmpty()) {
-            String srcId = ready.remove();
-            for (String tgtId : graph.outgoing().getOrDefault(srcId, List.of())) {
-                levels.put(tgtId, Math.max(
-                        levels.getOrDefault(tgtId, 0),
-                        levels.getOrDefault(srcId, 0) + 1));
-                int newIndegree = indegree.merge(tgtId, -1, Integer::sum);
-                if (newIndegree == 0) ready.add(tgtId);
+         while (visited.size() < nodeIds.size()) {
+            if (ready.isEmpty()) {
+                nodeIds.stream().filter(id -> !visited.contains(id)).findFirst().ifPresent(ready::add);
             }
-        }
+            String srcId = ready.remove();
+            if (!visited.add(srcId)) {
+                continue;
+            }
+        int sourceLevel = levels.getOrDefault(srcId, 0);
+            for (String tgtId : graph.outgoing().getOrDefault(srcId, List.of())) {
+                int targetLevel = levels.getOrDefault(tgtId, 0);
 
-        // Extra passes for cycles
-        for (int i = 0; i < nodeIds.size(); i++) {
-            boolean changed = false;
-            for (Map.Entry<String, List<String>> entry : graph.outgoing().entrySet()) {
-                for (String tgtId : entry.getValue()) {
-                    int candidate = levels.getOrDefault(entry.getKey(), 0) + 1;
-                    if (candidate > levels.getOrDefault(tgtId, 0) && candidate <= nodeIds.size()) {
-                        levels.put(tgtId, candidate);
-                        changed = true;
-                    }
+                // Backward/loop edges must not influence layering.
+                if (visited.contains(tgtId) && targetLevel <= sourceLevel) {
+                    loopEdges.add(srcId + "->" + tgtId);
+                    continue;
+                }
+
+                int candidate = sourceLevel + 1;
+                if (candidate > targetLevel) {
+                    levels.put(tgtId, candidate);
+                }
+
+                int newIndegree = indegree.merge(tgtId, -1, Integer::sum);
+                if (newIndegree <= 0) {
+                    ready.add(tgtId);
                 }
             }
-            if (!changed) break;
         }
         return levels;
     }

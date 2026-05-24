@@ -97,7 +97,10 @@ public class JsonToBpmnConverter {
     private static final double NESTED_SUBPROCESS_MIN_GAP      = 42;
     private static final double EDGE_VERTICAL_SPLIT_THRESHOLD  = 110;
     private static final double LOOP_EDGE_MIN_DETOUR_X         = 150;
-    private static final double MESSAGE_FLOW_TOP_CLEARANCE     = 95;
+    private static final double MESSAGE_FLOW_MIN_CLEARANCE     = 30;
+    private static final double LOOP_EDGE_COMPACT_THRESHOLD    = 350;
+    private static final double LOOP_EDGE_MAX_COMPACT_DEPTH    = 120;
+    private static final double MESSAGE_FLOW_VERTICAL_ALIGN_X   = 100;
     private static final double SUBPROCESS_TITLE_CLEARANCE     = 30;
     private static final double CONTAINER_RIGHT_NEIGHBOR_GAP   = 60;
     private static final Pattern NON_ID_CHARACTER              = Pattern.compile("[^A-Za-z0-9_.-]");
@@ -1252,27 +1255,44 @@ for (int levelIdx = 0; levelIdx < sortedLevels.size() - 1; levelIdx++) {
 
         double regionLeft  = Math.min(src.x(), tgt.x());
         double regionRight = Math.max(src.right(), tgt.right());
+        double loopDistance = Math.abs(src.x() - tgt.x());
+        boolean useCompactLoopRouting = loopDistance < LOOP_EDGE_COMPACT_THRESHOLD;
 
-        // Find the lowest bottom edge of any node in the bounding region
-        double loopBottom = Math.max(src.y() + src.height(), tgt.y() + tgt.height());
+        double baseBottom = Math.max(src.y() + src.height(), tgt.y() + tgt.height());
+        double maxOverlapBottom = baseBottom;
+        boolean hasBlockingOverlap = false;
+
+        
         for (NodeLayout layout : allLayouts.values()) {
-            if (layout.x() < regionRight && layout.right() > regionLeft) {
-                loopBottom = Math.max(loopBottom, layout.y() + layout.height());
+            
+                boolean overlapsBand = layout.x() < regionRight && layout.right() > regionLeft;
+            boolean betweenVerticalSpan = layout.y() < baseBottom && layout.y() + layout.height() > Math.min(src.y(), tgt.y());
+            if (overlapsBand && betweenVerticalSpan) {
+                hasBlockingOverlap = true;
+                maxOverlapBottom = Math.max(maxOverlapBottom, layout.y() + layout.height());
             }
         }
 
-        boolean largeContainer = src.width() > 400 || src.height() > 250
-                || tgt.width() > 400 || tgt.height() > 250;
-        loopBottom += largeContainer ? 120 : ORTHOGONAL_EDGE_OFFSET + 24;
+         double verticalPadding = useCompactLoopRouting ? 24 : ORTHOGONAL_EDGE_OFFSET + 24;
+        double loopBottom = (hasBlockingOverlap ? maxOverlapBottom : baseBottom) + verticalPadding;
 
-        double detourX = (Math.abs(tgt.right() - src.x()) < LOOP_EDGE_MIN_DETOUR_X)
-                ? src.x() - LOOP_EDGE_MIN_DETOUR_X
-                : tgt.right();
+        if (useCompactLoopRouting) {
+            double compactMax = baseBottom + LOOP_EDGE_MAX_COMPACT_DEPTH;
+            loopBottom = Math.min(loopBottom, compactMax);
+        } else {
+            boolean largeContainer = src.width() > 400 || src.height() > 250 || tgt.width() > 400 || tgt.height() > 250;
+            if (largeContainer && hasBlockingOverlap) {
+                loopBottom += 24;
+            }
+        }
+        double minDetourGap = useCompactLoopRouting ? 64 : LOOP_EDGE_MIN_DETOUR_X;
+        double preferredDetourX = Math.min(src.x(), tgt.right()) - minDetourGap;
+        double detourX = Math.max(tgt.right() + 20, preferredDetourX);
 
-        addWaypoint(modelInstance, edge, src.x(),    src.centerY());
-        addWaypoint(modelInstance, edge, src.x(),    loopBottom);
-        addWaypoint(modelInstance, edge, detourX,    loopBottom);
-        addWaypoint(modelInstance, edge, detourX,    tgt.centerY());
+        addWaypoint(modelInstance, edge, src.x(), src.centerY());
+        addWaypoint(modelInstance, edge, src.x(), loopBottom);
+        addWaypoint(modelInstance, edge, detourX, loopBottom);
+        addWaypoint(modelInstance, edge, detourX, tgt.centerY());
         addWaypoint(modelInstance, edge, tgt.right(), tgt.centerY());
     }
 
@@ -1415,21 +1435,36 @@ for (int levelIdx = 0; levelIdx < sortedLevels.size() - 1; levelIdx++) {
 
         double sourceTop = src.y();
         double targetTop = tgt.y();
+        double sourceX = src.centerX();
+        double targetX = tgt.centerX();
         double minTop = Math.min(sourceTop, targetTop);
-        double topY = minTop - MESSAGE_FLOW_TOP_CLEARANCE;
 
-        for (NodeLayout layout : allLayouts.values()) {
-            boolean overlapsHorizontalBand = layout.right() > Math.min(src.centerX(), tgt.centerX())
-                    && layout.x() < Math.max(src.centerX(), tgt.centerX());
-            if (overlapsHorizontalBand && layout.y() < minTop) {
-                topY = Math.min(topY, layout.y() - ORTHOGONAL_EDGE_OFFSET);
-            }
+        double xDistance = Math.abs(sourceX - targetX);
+        if (xDistance <= MESSAGE_FLOW_VERTICAL_ALIGN_X) {
+            double sideX = Math.max(src.right(), tgt.right()) + 30;
+            addWaypoint(modelInstance, edge, sourceX, sourceTop);
+            addWaypoint(modelInstance, edge, sideX, sourceTop);
+            addWaypoint(modelInstance, edge, sideX, targetTop);
+            addWaypoint(modelInstance, edge, targetX, targetTop);
+            return;
         }
 
-        addWaypoint(modelInstance, edge, src.centerX(), sourceTop);
-        addWaypoint(modelInstance, edge, src.centerX(), topY);
-        addWaypoint(modelInstance, edge, tgt.centerX(), topY);
-        addWaypoint(modelInstance, edge, tgt.centerX(), targetTop);
+        double topDelta = Math.abs(sourceTop - targetTop);
+        double dynamicClearance = Math.min(56, topDelta + 18);
+        double topY = minTop - Math.max(MESSAGE_FLOW_MIN_CLEARANCE, dynamicClearance);
+
+        for (NodeLayout layout : allLayouts.values()) {
+           boolean overlapsHorizontalBand = layout.right() > Math.min(sourceX, targetX)&& layout.x() < Math.max(sourceX, targetX);
+            boolean intrudesCorridor = layout.y() < minTop && layout.y() + layout.height() > topY;
+            if (overlapsHorizontalBand && intrudesCorridor) {
+                topY = Math.min(topY, layout.y() - 28);
+            }
+        } 
+
+        addWaypoint(modelInstance, edge, sourceX, sourceTop);
+        addWaypoint(modelInstance, edge, sourceX, topY);
+        addWaypoint(modelInstance, edge, targetX, topY);
+        addWaypoint(modelInstance, edge, targetX, targetTop);
     }
 
 

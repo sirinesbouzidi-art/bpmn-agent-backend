@@ -78,8 +78,8 @@ public class JsonToBpmnConverter {
 
     private static final double START_X                        = 160;
     private static final double START_Y                        = 220;
-    private static final double HORIZONTAL_GAP                 = 260;
-    private static final double MIN_VERTICAL_GAP               = 150;
+    private static final double HORIZONTAL_GAP                 = 300;
+    private static final double MIN_VERTICAL_GAP               = 190;
     private static final double LANE_PADDING                   = 70;
     private static final double EVENT_SIZE                     = 36;
     private static final double GATEWAY_SIZE                   = 50;
@@ -89,14 +89,15 @@ public class JsonToBpmnConverter {
     private static final double SUBPROCESS_COLLAPSED_HEIGHT    = 110;
     private static final double ADHOC_DEFAULT_WIDTH            = 500;
     private static final double ADHOC_DEFAULT_HEIGHT           = 320;
-    private static final double ORTHOGONAL_EDGE_OFFSET         = 30;
+    private static final double ORTHOGONAL_EDGE_OFFSET         = 48;
     private static final double SUBPROCESS_TOP_PADDING         = 40;
     private static final double SUBPROCESS_BOTTOM_PADDING      = 40;
     private static final double SUBPROCESS_LEFT_PADDING        = 52;
     private static final double SUBPROCESS_RIGHT_PADDING       = 90;
     private static final double NESTED_SUBPROCESS_MIN_GAP      = 42;
-    private static final double EDGE_VERTICAL_SPLIT_THRESHOLD  = 140;
-    private static final double LOOP_EDGE_MIN_DETOUR_X         = 120;
+    private static final double EDGE_VERTICAL_SPLIT_THRESHOLD  = 110;
+    private static final double LOOP_EDGE_MIN_DETOUR_X         = 150;
+    private static final double MESSAGE_FLOW_TOP_CLEARANCE     = 95;
     private static final double SUBPROCESS_TITLE_CLEARANCE     = 30;
     private static final double CONTAINER_RIGHT_NEIGHBOR_GAP   = 60;
     private static final Pattern NON_ID_CHARACTER              = Pattern.compile("[^A-Za-z0-9_.-]");
@@ -824,7 +825,7 @@ for (int levelIdx = 0; levelIdx < sortedLevels.size() - 1; levelIdx++) {
         double contentTop  = parentLayout.y() + SUBPROCESS_TOP_PADDING + SUBPROCESS_TITLE_CLEARANCE;
 
         double colSpacing  = HORIZONTAL_GAP;
-        double rowSpacing  = Math.max(MIN_VERTICAL_GAP, TASK_HEIGHT + 70);
+        double rowSpacing  = Math.max(MIN_VERTICAL_GAP, TASK_HEIGHT + 90);
 
         Map<String, NodeLayout> layouts = new HashMap<>();
         int index = 0;
@@ -966,7 +967,7 @@ for (int levelIdx = 0; levelIdx < sortedLevels.size() - 1; levelIdx++) {
                 if (nextLevelTargets.size() < 2) continue;
 
                 double gatewayCenterY = balanced.get(node.getId()).centerY();
-                double branchGap      = Math.max(MIN_VERTICAL_GAP,
+                double branchGap      = Math.max(MIN_VERTICAL_GAP + 20,
                         verticalGapForLayouts(nextLevelTargets, balanced));
                 double firstCenterY   = gatewayCenterY
                         - ((nextLevelTargets.size() - 1) * branchGap / 2);
@@ -1003,7 +1004,7 @@ for (int levelIdx = 0; levelIdx < sortedLevels.size() - 1; levelIdx++) {
 
     private double verticalGapFor(List<FlowNode> nodes) {
         boolean hasGateway = nodes.stream().anyMatch(this::isGateway);
-        return Math.max(MIN_VERTICAL_GAP, (hasGateway ? 190 : 160) + (nodes.size() * 8));
+        return Math.max(MIN_VERTICAL_GAP + 20, (hasGateway ? 190 : 160) + (nodes.size() * 8));
     }
 
     private double verticalGapForLayouts(
@@ -1365,9 +1366,11 @@ for (int levelIdx = 0; levelIdx < sortedLevels.size() - 1; levelIdx++) {
    private void createGenericBpmnEdge(BpmnModelInstance modelInstance, BpmnPlane plane, BaseElement edgeElement, Map<String, NodeLayout> nodeLayouts, Set<String> usedDiIds) {
         String sourceId = null;
         String targetId = null;
+        boolean isMessageFlow = false;
         if (edgeElement instanceof MessageFlow flow) {
             sourceId = flow.getSource().getId();
             targetId = flow.getTarget().getId();
+            isMessageFlow = true;
         } else if (edgeElement instanceof Association association) {
             sourceId = association.getSource().getId();
             targetId = association.getTarget().getId();
@@ -1385,6 +1388,11 @@ for (int levelIdx = 0; levelIdx < sortedLevels.size() - 1; levelIdx++) {
         BpmnEdge edge = modelInstance.newInstance(BpmnEdge.class);
         edge.setId(stableDiId("BPMNEdge", edgeElement.getId(), modelInstance, usedDiIds));
         edge.setBpmnElement(edgeElement);
+        if (isMessageFlow) {
+            routeMessageFlowEdge(modelInstance, edge, sourceLayout, targetLayout, nodeLayouts);
+            plane.addChildElement(edge);
+            return;
+        }
 
         boolean isForward = targetLayout.x() >= sourceLayout.right();
         boolean isLoop    = targetLayout.right() <= sourceLayout.x() + 10;
@@ -1397,6 +1405,31 @@ for (int levelIdx = 0; levelIdx < sortedLevels.size() - 1; levelIdx++) {
             routeAroundEdge(modelInstance, edge, sourceLayout, targetLayout, nodeLayouts);
         }
         plane.addChildElement(edge);
+    }
+    private void routeMessageFlowEdge(
+            BpmnModelInstance modelInstance,
+            BpmnEdge edge,
+            NodeLayout src,
+            NodeLayout tgt,
+            Map<String, NodeLayout> allLayouts) {
+
+        double sourceTop = src.y();
+        double targetTop = tgt.y();
+        double minTop = Math.min(sourceTop, targetTop);
+        double topY = minTop - MESSAGE_FLOW_TOP_CLEARANCE;
+
+        for (NodeLayout layout : allLayouts.values()) {
+            boolean overlapsHorizontalBand = layout.right() > Math.min(src.centerX(), tgt.centerX())
+                    && layout.x() < Math.max(src.centerX(), tgt.centerX());
+            if (overlapsHorizontalBand && layout.y() < minTop) {
+                topY = Math.min(topY, layout.y() - ORTHOGONAL_EDGE_OFFSET);
+            }
+        }
+
+        addWaypoint(modelInstance, edge, src.centerX(), sourceTop);
+        addWaypoint(modelInstance, edge, src.centerX(), topY);
+        addWaypoint(modelInstance, edge, tgt.centerX(), topY);
+        addWaypoint(modelInstance, edge, tgt.centerX(), targetTop);
     }
 
 
@@ -1558,6 +1591,9 @@ for (int levelIdx = 0; levelIdx < sortedLevels.size() - 1; levelIdx++) {
 
         double centerY() {
             return y + (height / 2);
+        }
+         double centerX() {
+            return x + (width / 2);
         }
 
         NodeLayout withY(double newY) {

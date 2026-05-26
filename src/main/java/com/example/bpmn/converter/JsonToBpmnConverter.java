@@ -16,9 +16,7 @@ import org.camunda.bpm.model.bpmn.BpmnModelInstance;
 import org.camunda.bpm.model.bpmn.builder.AbstractFlowNodeBuilder;
 import org.camunda.bpm.model.bpmn.impl.BpmnModelConstants;
 import org.camunda.bpm.model.bpmn.instance.ComplexGateway;
-import org.camunda.bpm.model.bpmn.instance.DataInputAssociation;
 import org.camunda.bpm.model.bpmn.instance.DataObjectReference;
-import org.camunda.bpm.model.bpmn.instance.DataOutputAssociation;
 import org.camunda.bpm.model.bpmn.instance.DataStoreReference;
 import org.camunda.bpm.model.bpmn.instance.Definitions;
 import org.camunda.bpm.model.bpmn.instance.EndEvent;
@@ -85,6 +83,10 @@ public class JsonToBpmnConverter {
     private static final double GATEWAY_SIZE                   = 50;
     private static final double TASK_WIDTH                     = 120;
     private static final double TASK_HEIGHT                    = 80;
+    private static final double DATA_OBJECT_WIDTH              = 36;
+    private static final double DATA_OBJECT_HEIGHT             = 50;
+    private static final double DATA_STORE_WIDTH               = 50;
+    private static final double DATA_STORE_HEIGHT              = 50;
     private static final double SUBPROCESS_COLLAPSED_WIDTH     = 180;
     private static final double SUBPROCESS_COLLAPSED_HEIGHT    = 110;
     private static final double ADHOC_DEFAULT_WIDTH            = 500;
@@ -203,8 +205,6 @@ public class JsonToBpmnConverter {
                 case "association" -> nonSequenceFlows.add(flowFactory.createAssociation(modelInstance, process, flow, elementsById, AssociationDirection.None));
                 case "associationOne" -> nonSequenceFlows.add(flowFactory.createAssociation(modelInstance, process, flow, elementsById, AssociationDirection.One));
                 case "associationBoth" -> nonSequenceFlows.add(flowFactory.createAssociation(modelInstance, process, flow, elementsById, AssociationDirection.Both));
-                case "dataInputAssociation" -> nonSequenceFlows.add(flowFactory.createDataInputAssociation(modelInstance, flow, elementsById));
-                case "dataOutputAssociation" -> nonSequenceFlows.add(flowFactory.createDataOutputAssociation(modelInstance, flow, elementsById));
                 
                 default -> throw new IllegalArgumentException("Unsupported BPMN flow type: " + flowType);
             }
@@ -1120,10 +1120,11 @@ for (int levelIdx = 0; levelIdx < sortedLevels.size() - 1; levelIdx++) {
             BaseElement source = association.getSource();
             BaseElement target = association.getTarget();
             if (source == null || target == null) continue;
+
             if (source instanceof FlowNode && !(target instanceof FlowNode) && elementsById.containsKey(target.getId())) {
                 NodeLayout src = nodeLayouts.get(source.getId());
                 if (src != null && !artifactLayouts.containsKey(target.getId())) {
-                    artifactLayouts.put(target.getId(), new NodeLayout(src.right() + 60, src.y() - 20, 140, 50));
+                    artifactLayouts.put(target.getId(), placeArtifactNearNode(target, src, nodeLayouts, artifactLayouts));
                 }
             }
             if (target instanceof FlowNode && !(source instanceof FlowNode) && elementsById.containsKey(source.getId())) {
@@ -1134,6 +1135,41 @@ for (int levelIdx = 0; levelIdx < sortedLevels.size() - 1; levelIdx++) {
             }
         }
         return artifactLayouts;
+    }
+    private NodeLayout placeArtifactNearNode(BaseElement artifact, NodeLayout anchor, Map<String, NodeLayout> nodeLayouts, Map<String, NodeLayout> existingArtifactLayouts) {
+        double width = getArtifactWidth(artifact);
+        double height = getArtifactHeight(artifact);
+
+        NodeLayout candidate = new NodeLayout(anchor.right() + 60, anchor.y() - 20, width, height);
+        while (overlapsAny(candidate, nodeLayouts.values()) || overlapsAny(candidate, existingArtifactLayouts.values())) {
+            candidate = candidate.withY(candidate.y() + height + 16);
+        }
+        return candidate;
+    }
+
+    private double getArtifactWidth(BaseElement artifact) {
+        if (artifact instanceof DataObjectReference) return DATA_OBJECT_WIDTH;
+        if (artifact instanceof DataStoreReference) return DATA_STORE_WIDTH;
+        if (artifact instanceof TextAnnotation) return 140;
+        return 100;
+    }
+
+    private double getArtifactHeight(BaseElement artifact) {
+        if (artifact instanceof DataObjectReference) return DATA_OBJECT_HEIGHT;
+        if (artifact instanceof DataStoreReference) return DATA_STORE_HEIGHT;
+        if (artifact instanceof TextAnnotation) return 50;
+        return 50;
+    }
+
+    private boolean overlapsAny(NodeLayout candidate, Collection<NodeLayout> layouts) {
+        for (NodeLayout other : layouts) {
+            boolean overlapX = candidate.x() < other.right() && candidate.right() > other.x();
+            boolean overlapY = candidate.y() < other.y() + other.height() && candidate.y() + candidate.height() > other.y();
+            if (overlapX && overlapY) {
+                return true;
+            }
+        }
+        return false;
     }
     private void renderExpandedAdHocContents(
             BpmnModelInstance modelInstance,
@@ -1402,12 +1438,6 @@ for (int levelIdx = 0; levelIdx < sortedLevels.size() - 1; levelIdx++) {
         } else if (edgeElement instanceof Association association) {
             sourceId = association.getSource().getId();
             targetId = association.getTarget().getId();
-        } else if (edgeElement instanceof DataInputAssociation inputAssociation) {
-            if (!inputAssociation.getSources().isEmpty()) sourceId = inputAssociation.getSources().iterator().next().getId();
-            if (inputAssociation.getParentElement() instanceof BaseElement parent) targetId = parent.getId();
-        } else if (edgeElement instanceof DataOutputAssociation outputAssociation) {
-            if (outputAssociation.getParentElement() instanceof BaseElement parent) sourceId = parent.getId();
-            if (outputAssociation.getTarget() != null) targetId = outputAssociation.getTarget().getId();
         }
         if (sourceId == null || targetId == null) return;
         NodeLayout sourceLayout = nodeLayouts.get(sourceId);

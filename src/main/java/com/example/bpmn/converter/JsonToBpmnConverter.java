@@ -1,7 +1,9 @@
 package com.example.bpmn.converter;
 
 import com.example.bpmn.dto.BpmnRequest;
+import com.example.bpmn.dto.CollaborationDTO;
 import com.example.bpmn.dto.ElementDTO;
+import com.example.bpmn.dto.ParticipantDTO;
 import com.example.bpmn.dto.FlowDTO;
 import com.example.bpmn.dto.ProcessDTO;
 import com.example.bpmn.factory.event.EventFactory;
@@ -105,6 +107,12 @@ public class JsonToBpmnConverter {
     private static final double MESSAGE_FLOW_VERTICAL_ALIGN_X   = 100;
     private static final double SUBPROCESS_TITLE_CLEARANCE     = 30;
     private static final double CONTAINER_RIGHT_NEIGHBOR_GAP   = 60;
+    private static final double COLLAB_POOL_X                  = 80;
+    private static final double COLLAB_POOL_WIDTH              = 2200;
+    private static final double COLLAB_POOL_HEIGHT             = 320;
+    private static final double COLLAB_POOL_START_Y            = 100;
+    private static final double COLLAB_POOL_GAP_Y              = 80;
+    private static final double COLLAB_CONTENT_CENTER_Y_OFFSET = 160;
     private static final Pattern NON_ID_CHARACTER              = Pattern.compile("[^A-Za-z0-9_.-]");
 
     // =====================================================
@@ -136,7 +144,15 @@ public class JsonToBpmnConverter {
     // =====================================================
 
     public String convert(BpmnRequest request) {
-        ProcessDTO processDTO = validateRequest(request);
+        ValidationMode mode = validateMode(request);
+        if (mode == ValidationMode.SINGLE_PROCESS) {
+            return convertSingleProcess(request);
+        }
+        return convertCollaboration(request);
+    }
+
+    private String convertSingleProcess(BpmnRequest request) {
+        ProcessDTO processDTO = request.getProcess();
         String processId = requireText(processDTO.getId(), "process id is required");
 
         BpmnModelInstance modelInstance = Bpmn.createEmptyModel();
@@ -215,18 +231,212 @@ public class JsonToBpmnConverter {
         return writeModelToString(modelInstance);
     }
 
+    private String convertCollaboration(BpmnRequest request) {
+        BpmnModelInstance modelInstance = Bpmn.createEmptyModel();
+        Definitions definitions = modelInstance.newInstance(Definitions.class);
+        definitions.setTargetNamespace("http://camunda.org/examples");
+        modelInstance.setDefinitions(definitions);
+
+        CollaborationDTO collaborationDTO = request.getCollaboration();
+        Collaboration collaboration = modelInstance.newInstance(Collaboration.class);
+        collaboration.setId(requireText(collaborationDTO.getId(), "collaboration id is required"));
+        definitions.addChildElement(collaboration);
+
+        Map<String, BaseElement> globalElements = new LinkedHashMap<>();
+        Map<String, Map<String, FlowNode>> processNodesById = new LinkedHashMap<>();
+        Map<String, Map<String, BaseElement>> processElementsById = new LinkedHashMap<>();
+        Map<String, List<SequenceFlow>> processSequenceFlows = new LinkedHashMap<>();
+
+        for (ProcessDTO processDTO : request.getProcesses()) {
+            Process process = modelInstance.newInstance(Process.class);
+            String processId = requireText(processDTO.getId(), "process id is required");
+            process.setId(processId);
+            process.setExecutable(true);
+            setName(process, processDTO.getName());
+            definitions.addChildElement(process);
+
+            List<ElementDTO> elements = processDTO.getElements() == null ? List.of() : processDTO.getElements();
+            adHocSubProcessIds.clear();
+            collectAdHocIds(elements);
+            Map<String, FlowNode> nodesById = new LinkedHashMap<>();
+            Map<String, BaseElement> elementsById = new LinkedHashMap<>();
+            for (ElementDTO element : elements) {
+                String elementId = requireElementId(element);
+                if ("textAnnotation".equals(element.getType())) continue;
+                if ("dataObjectReference".equals(element.getType())) {
+                    DataObjectReference d = modelInstance.newInstance(DataObjectReference.class); d.setId(elementId); process.addChildElement(d); elementsById.put(d.getId(), d); continue;
+                }
+                if ("dataStoreReference".equals(element.getType())) {
+                    DataStoreReference d = modelInstance.newInstance(DataStoreReference.class); d.setId(elementId); process.addChildElement(d); elementsById.put(d.getId(), d); continue;
+                }
+                FlowNode node = createFlowNode(modelInstance, process, element);
+                nodesById.put(node.getId(), node);
+                elementsById.put(node.getId(), node);
+            }
+            List<SequenceFlow> sequenceFlows = new ArrayList<>();
+            for (FlowDTO flow : processDTO.getFlows() == null ? List.<FlowDTO>of() : processDTO.getFlows()) {
+                sequenceFlows.add(flowFactory.createSequenceFlow(modelInstance, process, flow, nodesById));
+            }
+            processNodesById.put(processId, nodesById);
+            processElementsById.put(processId, elementsById);
+            processSequenceFlows.put(processId, sequenceFlows);
+            globalElements.putAll(elementsById);
+        }
+
+        for (ParticipantDTO participantDTO : collaborationDTO.getParticipants()) {
+            Participant participant = modelInstance.newInstance(Participant.class);
+            participant.setId(requireText(participantDTO.getId(), "participant id is required"));
+            participant.setName(participantDTO.getName());
+            Process ref = modelInstance.getModelElementById(requireText(participantDTO.getProcessRef(), "participant processRef is required"));
+            if (ref == null) throw new IllegalArgumentException("Unknown processRef: " + participantDTO.getProcessRef());
+            participant.setProcess(ref);
+            collaboration.addChildElement(participant);
+        }
+
+        List<BaseElement> messageFlows = new ArrayList<>();
+        for (FlowDTO flow : request.getMessageFlows() == null ? List.<FlowDTO>of() : request.getMessageFlows()) {
+            messageFlows.add(flowFactory.createMessageFlow(modelInstance, collaboration, flow, globalElements));
+        }
+
+        applyCollaborationLayout(
+                modelInstance,
+                definitions,
+                collaboration,
+                processNodesById,
+                processElementsById,
+                processSequenceFlows,
+                messageFlows);
+
+        Bpmn.validateModel(modelInstance);
+        return writeModelToString(modelInstance);
+    }
+
+    private void applyCollaborationLayout(
+            BpmnModelInstance modelInstance,
+            Definitions definitions,
+            Collaboration collaboration,
+            Map<String, Map<String, FlowNode>> processNodesById,
+            Map<String, Map<String, BaseElement>> processElementsById,
+            Map<String, List<SequenceFlow>> processSequenceFlows,
+            List<BaseElement> messageFlows) {
+
+        definitions.setTargetNamespace(BpmnModelConstants.BPMN20_NS);
+        new ArrayList<>(definitions.getBpmDiagrams()).forEach(definitions::removeChildElement);
+        Set<String> usedDiIds = new HashSet<>();
+
+        BpmnDiagram diagram = modelInstance.newInstance(BpmnDiagram.class);
+        diagram.setId(stableDiId("BPMNDiagram", collaboration.getId(), modelInstance, usedDiIds));
+        BpmnPlane plane = modelInstance.newInstance(BpmnPlane.class);
+        plane.setId(stableDiId("BPMNPlane", collaboration.getId(), modelInstance, usedDiIds));
+        plane.setBpmnElement(collaboration);
+        diagram.setBpmnPlane(plane);
+        definitions.addChildElement(diagram);
+
+        Map<String, NodeLayout> globalLayouts = new LinkedHashMap<>();
+        List<Participant> participants = new ArrayList<>(collaboration.getParticipants());
+
+        for (int i = 0; i < participants.size(); i++) {
+            Participant participant = participants.get(i);
+            String processRef = participant.getProcess() == null ? null : participant.getProcess().getId();
+            if (processRef == null) continue;
+
+            double poolY = COLLAB_POOL_START_Y + (i * (COLLAB_POOL_HEIGHT + COLLAB_POOL_GAP_Y));
+            createParticipantShape(modelInstance, plane, participant, poolY, usedDiIds);
+
+            Map<String, FlowNode> nodesById = processNodesById.getOrDefault(processRef, Map.of());
+            List<SequenceFlow> sequenceFlows = processSequenceFlows.getOrDefault(processRef, List.of());
+            if (nodesById.isEmpty()) continue;
+
+            globalNodeLayouts.clear();
+            computeContainerSizesBottomUp(nodesById);
+            Map<String, NodeLayout> nodeLayouts = assignPositionsTopDown(nodesById, sequenceFlows);
+            globalNodeLayouts.putAll(nodeLayouts);
+
+            GraphIndex graph = buildGraphIndex(nodesById, sequenceFlows);
+            Map<String, Integer> levels = calculateLevels(nodesById.keySet(), graph);
+            Map<Integer, List<FlowNode>> nodesByLevel = groupNodesByLevel(nodesById.values(), levels);
+            Map<String, Integer> levelByNodeId = new HashMap<>();
+            nodesByLevel.forEach((lvl, nodes) -> nodes.forEach(n -> levelByNodeId.put(n.getId(), lvl)));
+            resolveContainerOverlaps(nodeLayouts, nodesByLevel, levelByNodeId);
+
+            double processCenterY = poolY + COLLAB_CONTENT_CENTER_Y_OFFSET;
+            double currentCenterY = nodeLayouts.values().stream().mapToDouble(NodeLayout::centerY).average().orElse(processCenterY);
+            double yOffset = processCenterY - currentCenterY;
+            Map<String, NodeLayout> shiftedNodeLayouts = new LinkedHashMap<>();
+            for (Map.Entry<String, NodeLayout> entry : nodeLayouts.entrySet()) {
+                NodeLayout l = entry.getValue();
+                shiftedNodeLayouts.put(entry.getKey(), new NodeLayout(l.x(), l.y() + yOffset, l.width(), l.height()));
+            }
+            globalLayouts.putAll(shiftedNodeLayouts);
+
+            Map<String, BaseElement> elementsById = processElementsById.getOrDefault(processRef, Map.of());
+            Map<String, NodeLayout> artifactLayouts = computeArtifactLayouts(elementsById, List.of(), shiftedNodeLayouts);
+            globalLayouts.putAll(artifactLayouts);
+        }
+
+        for (Map<String, FlowNode> nodes : processNodesById.values()) {
+            for (FlowNode node : nodes.values()) {
+                NodeLayout layout = globalLayouts.get(node.getId());
+                if (layout != null) {
+                    createBpmnShape(modelInstance, plane, node, layout, usedDiIds);
+                }
+            }
+        }
+        for (Map.Entry<String, Map<String, BaseElement>> entry : processElementsById.entrySet()) {
+            for (BaseElement element : entry.getValue().values()) {
+                if (element instanceof FlowNode) continue;
+                NodeLayout layout = globalLayouts.get(element.getId());
+                if (layout != null) {
+                    createBpmnShape(modelInstance, plane, element, layout, usedDiIds);
+                }
+            }
+        }
+        for (Map.Entry<String, List<SequenceFlow>> entry : processSequenceFlows.entrySet()) {
+            for (SequenceFlow flow : entry.getValue()) {
+                createBpmnEdgeRouted(modelInstance, plane, flow, globalLayouts, usedDiIds);
+            }
+        }
+        for (BaseElement edge : messageFlows) {
+            createGenericBpmnEdge(modelInstance, plane, edge, globalLayouts, usedDiIds);
+        }
+    }
+
+    private void createParticipantShape(
+            BpmnModelInstance modelInstance,
+            BpmnPlane plane,
+            Participant participant,
+            double y,
+            Set<String> usedDiIds) {
+        BpmnShape participantShape = modelInstance.newInstance(BpmnShape.class);
+        participantShape.setId(stableDiId("BPMNShape", participant.getId(), modelInstance, usedDiIds));
+        participantShape.setBpmnElement(participant);
+        participantShape.setHorizontal(true);
+
+        Bounds bounds = modelInstance.newInstance(Bounds.class);
+        bounds.setX(COLLAB_POOL_X);
+        bounds.setY(y);
+        bounds.setWidth(COLLAB_POOL_WIDTH);
+        bounds.setHeight(COLLAB_POOL_HEIGHT);
+        participantShape.setBounds(bounds);
+        plane.addChildElement(participantShape);
+    }
+
     // =====================================================
     // VALIDATION
     // =====================================================
 
-    private ProcessDTO validateRequest(BpmnRequest request) {
-        if (request == null) {
-            throw new IllegalArgumentException("BPMN request is required");
+    private enum ValidationMode { SINGLE_PROCESS, COLLABORATION }
+
+    private ValidationMode validateMode(BpmnRequest request) {
+        if (request == null) throw new IllegalArgumentException("BPMN request is required");
+        if (request.getCollaboration() != null) {
+            if (request.getProcesses() == null || request.getProcesses().isEmpty()) {
+                throw new IllegalArgumentException("processes is required in collaboration mode");
+            }
+            return ValidationMode.COLLABORATION;
         }
-        if (request.getProcess() == null) {
-            throw new IllegalArgumentException("process is required");
-        }
-        return request.getProcess();
+        if (request.getProcess() == null) throw new IllegalArgumentException("process is required");
+        return ValidationMode.SINGLE_PROCESS;
     }
 
     private String requireElementId(ElementDTO element) {

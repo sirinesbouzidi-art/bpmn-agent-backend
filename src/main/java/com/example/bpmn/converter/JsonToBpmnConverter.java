@@ -108,11 +108,11 @@ public class JsonToBpmnConverter {
     private static final double SUBPROCESS_TITLE_CLEARANCE     = 30;
     private static final double CONTAINER_RIGHT_NEIGHBOR_GAP   = 60;
     private static final double COLLAB_POOL_X                  = 80;
-    private static final double COLLAB_POOL_WIDTH              = 2200;
-    private static final double COLLAB_POOL_HEIGHT             = 320;
+    private static final double COLLAB_POOL_WIDTH              = 2800;
+    private static final double COLLAB_POOL_HEIGHT             = 550;
     private static final double COLLAB_POOL_START_Y            = 100;
     private static final double COLLAB_POOL_GAP_Y              = 80;
-    private static final double COLLAB_CONTENT_CENTER_Y_OFFSET = 160;
+    private static final double COLLAB_CONTENT_CENTER_Y_OFFSET = 200;
     private static final Pattern NON_ID_CHARACTER              = Pattern.compile("[^A-Za-z0-9_.-]");
 
     // =====================================================
@@ -174,62 +174,92 @@ public class JsonToBpmnConverter {
         collectAdHocIds(elements);
 
         Map<String, FlowNode> nodesById = new LinkedHashMap<>();
-        Map<String, BaseElement> elementsById = new LinkedHashMap<>();
-        for (ElementDTO element : elements) {
-            String elementId = requireElementId(element);
-            if (nodesById.containsKey(elementId)) {
-                throw new IllegalArgumentException("Duplicate BPMN element id: " + elementId);
-            }
-            if ("textAnnotation".equals(element.getType())) {
-                TextAnnotation annotation = modelInstance.newInstance(TextAnnotation.class);
-                annotation.setId(elementId);
-                Text text = modelInstance.newInstance(Text.class);
-                text.setTextContent(element.getName() == null ? "" : element.getName());
-                annotation.setText(text);
-                process.addChildElement(annotation);
-                elementsById.put(annotation.getId(), annotation);
-                continue;
-            }
-            if ("dataObjectReference".equals(element.getType())) {
-                DataObjectReference dataObjectReference = modelInstance.newInstance(DataObjectReference.class);
-                dataObjectReference.setId(elementId);
-                setName(dataObjectReference, element.getName());
-                process.addChildElement(dataObjectReference);
-                elementsById.put(dataObjectReference.getId(), dataObjectReference);
-                continue;
-            }
-            if ("dataStoreReference".equals(element.getType())) {
-                DataStoreReference dataStoreReference = modelInstance.newInstance(DataStoreReference.class);
-                dataStoreReference.setId(elementId);
-                setName(dataStoreReference, element.getName());
-                process.addChildElement(dataStoreReference);
-                elementsById.put(dataStoreReference.getId(), dataStoreReference);
-                continue;
-            }
-            FlowNode node = createFlowNode(modelInstance, process, element);
-            nodesById.put(node.getId(), node);
-            elementsById.put(node.getId(), node);
-        }
+Map<String, BaseElement> elementsById = new LinkedHashMap<>();
+
+for (ElementDTO element : elements) {
+    String elementId = requireElementId(element);
+    if (nodesById.containsKey(elementId)) {
+        throw new IllegalArgumentException("Duplicate BPMN element id: " + elementId);
+    }
+    if (element.getParentId() != null) continue;
+    if ("textAnnotation".equals(element.getType())) {
+        TextAnnotation annotation = modelInstance.newInstance(TextAnnotation.class);
+        annotation.setId(elementId);
+        Text text = modelInstance.newInstance(Text.class);
+        text.setTextContent(element.getName() == null ? "" : element.getName());
+        annotation.setText(text);
+        process.addChildElement(annotation);
+        elementsById.put(annotation.getId(), annotation);
+        continue;
+    }
+    if ("dataObjectReference".equals(element.getType())) {
+        DataObjectReference dataObjectReference = modelInstance.newInstance(DataObjectReference.class);
+        dataObjectReference.setId(elementId);
+        setName(dataObjectReference, element.getName());
+        process.addChildElement(dataObjectReference);
+        elementsById.put(dataObjectReference.getId(), dataObjectReference);
+        continue;
+    }
+    if ("dataStoreReference".equals(element.getType())) {
+        DataStoreReference dataStoreReference = modelInstance.newInstance(DataStoreReference.class);
+        dataStoreReference.setId(elementId);
+        setName(dataStoreReference, element.getName());
+        process.addChildElement(dataStoreReference);
+        elementsById.put(dataStoreReference.getId(), dataStoreReference);
+        continue;
+    }
+    FlowNode node = createFlowNode(modelInstance, process, element);
+    nodesById.put(node.getId(), node);
+    elementsById.put(node.getId(), node);
+}
+
+for (ElementDTO element : elements) {
+    if (element.getParentId() == null) continue;
+    FlowNode parentNode = nodesById.get(element.getParentId());
+    if (!(parentNode instanceof SubProcess parentSubProcess)) {
+        throw new IllegalArgumentException(
+            "parentId references a non-SubProcess element: " + element.getParentId());
+    }
+    FlowNode child = subProcessFactory.createChildNodePublic(modelInstance, parentSubProcess, element);
+    nodesById.put(child.getId(), child);
+    elementsById.put(child.getId(), child);
+}
 
         List<SequenceFlow> sequenceFlows = new ArrayList<>();
-        List<BaseElement> nonSequenceFlows = new ArrayList<>();
-        for (FlowDTO flow : getFlows(request, processDTO)) {
-            String flowType = flow.getType() == null ? "sequenceFlow" : flow.getType();
-            switch (flowType) {
-                case "sequenceFlow" -> sequenceFlows.add(flowFactory.createSequenceFlow(modelInstance, process, flow, nodesById));
-                case "messageFlow" -> nonSequenceFlows.add(flowFactory.createMessageFlow(modelInstance, ensureCollaboration(modelInstance, definitions, process), flow, elementsById));
-                case "association" -> nonSequenceFlows.add(flowFactory.createAssociation(modelInstance, process, flow, elementsById, AssociationDirection.None));
-                case "associationOne" -> nonSequenceFlows.add(flowFactory.createAssociation(modelInstance, process, flow, elementsById, AssociationDirection.One));
-                case "associationBoth" -> nonSequenceFlows.add(flowFactory.createAssociation(modelInstance, process, flow, elementsById, AssociationDirection.Both));
-                
-                default -> throw new IllegalArgumentException("Unsupported BPMN flow type: " + flowType);
+List<BaseElement> nonSequenceFlows = new ArrayList<>();
+for (FlowDTO flow : getFlows(request, processDTO)) {
+    String flowType = flow.getType() == null ? "sequenceFlow" : flow.getType();
+    switch (flowType) {
+        case "sequenceFlow" -> {
+            FlowNode source = nodesById.get(flow.getFrom());
+            FlowNode target = nodesById.get(flow.getTo());
+            if (source != null && target != null
+                    && source.getParentElement() instanceof SubProcess sp
+                    && source.getParentElement() == target.getParentElement()) {
+                Map<String, FlowNode> allSubNodes = new LinkedHashMap<>();
+for (Map.Entry<String, FlowNode> entry : nodesById.entrySet()) {
+    if (entry.getValue().getParentElement() == sp) {
+        allSubNodes.put(entry.getKey(), entry.getValue());
+    }
+}
+flowFactory.createSequenceFlow(modelInstance, sp, flow, allSubNodes);
+            } else {
+                sequenceFlows.add(flowFactory.createSequenceFlow(modelInstance, process, flow, nodesById));
             }
         }
+        case "messageFlow" -> nonSequenceFlows.add(flowFactory.createMessageFlow(modelInstance, ensureCollaboration(modelInstance, definitions, process), flow, elementsById));
+        case "association" -> nonSequenceFlows.add(flowFactory.createAssociation(modelInstance, process, flow, elementsById, AssociationDirection.None));
+        case "associationOne" -> nonSequenceFlows.add(flowFactory.createAssociation(modelInstance, process, flow, elementsById, AssociationDirection.One));
+        case "associationBoth" -> nonSequenceFlows.add(flowFactory.createAssociation(modelInstance, process, flow, elementsById, AssociationDirection.Both));
+        default -> throw new IllegalArgumentException("Unsupported BPMN flow type: " + flowType);
+    }
+}
 
         applyCamundaModelApiLayout(modelInstance, process, nodesById, elementsById, sequenceFlows, nonSequenceFlows);
         Bpmn.validateModel(modelInstance);
         return writeModelToString(modelInstance);
     }
+    
 
     private String convertCollaboration(BpmnRequest request) {
         BpmnModelInstance modelInstance = Bpmn.createEmptyModel();
@@ -258,29 +288,69 @@ public class JsonToBpmnConverter {
             List<ElementDTO> elements = processDTO.getElements() == null ? List.of() : processDTO.getElements();
             adHocSubProcessIds.clear();
             collectAdHocIds(elements);
-            Map<String, FlowNode> nodesById = new LinkedHashMap<>();
-            Map<String, BaseElement> elementsById = new LinkedHashMap<>();
-            for (ElementDTO element : elements) {
-                String elementId = requireElementId(element);
-                if ("textAnnotation".equals(element.getType())) continue;
-                if ("dataObjectReference".equals(element.getType())) {
-                    DataObjectReference d = modelInstance.newInstance(DataObjectReference.class); d.setId(elementId); process.addChildElement(d); elementsById.put(d.getId(), d); continue;
-                }
-                if ("dataStoreReference".equals(element.getType())) {
-                    DataStoreReference d = modelInstance.newInstance(DataStoreReference.class); d.setId(elementId); process.addChildElement(d); elementsById.put(d.getId(), d); continue;
-                }
-                FlowNode node = createFlowNode(modelInstance, process, element);
-                nodesById.put(node.getId(), node);
-                elementsById.put(node.getId(), node);
-            }
+           Map<String, FlowNode> nodesById = new LinkedHashMap<>();
+           Map<String, BaseElement> elementsById = new LinkedHashMap<>();
+
+for (ElementDTO element : elements) {
+    String elementId = requireElementId(element);
+    if (element.getParentId() != null) continue;
+    if ("textAnnotation".equals(element.getType())) continue;
+    if ("dataObjectReference".equals(element.getType())) {
+        DataObjectReference d = modelInstance.newInstance(DataObjectReference.class);
+        d.setId(elementId); process.addChildElement(d); elementsById.put(d.getId(), d); continue;
+    }
+    if ("dataStoreReference".equals(element.getType())) {
+        DataStoreReference d = modelInstance.newInstance(DataStoreReference.class);
+        d.setId(elementId); process.addChildElement(d); elementsById.put(d.getId(), d); continue;
+    }
+    FlowNode node = createFlowNode(modelInstance, process, element);
+    nodesById.put(node.getId(), node);
+    elementsById.put(node.getId(), node);
+}
+
+for (ElementDTO element : elements) {
+    if (element.getParentId() == null) continue;
+    FlowNode parentNode = nodesById.get(element.getParentId());
+    if (!(parentNode instanceof SubProcess parentSubProcess)) {
+        throw new IllegalArgumentException(
+            "parentId references a non-SubProcess element: " + element.getParentId());
+    }
+    FlowNode child = subProcessFactory.createChildNodePublic(modelInstance, parentSubProcess, element);
+    nodesById.put(child.getId(), child);
+    elementsById.put(child.getId(), child);
+}
             List<SequenceFlow> sequenceFlows = new ArrayList<>();
-            for (FlowDTO flow : processDTO.getFlows() == null ? List.<FlowDTO>of() : processDTO.getFlows()) {
-                sequenceFlows.add(flowFactory.createSequenceFlow(modelInstance, process, flow, nodesById));
-            }
+for (FlowDTO flow : processDTO.getFlows() == null ? List.<FlowDTO>of() : processDTO.getFlows()) {
+    FlowNode source = nodesById.get(flow.getFrom());
+    FlowNode target = nodesById.get(flow.getTo());
+    if (source != null && target != null
+            && source.getParentElement() instanceof SubProcess sp
+            && source.getParentElement() == target.getParentElement()) {
+        Map<String, FlowNode> allSubNodes = new LinkedHashMap<>();
+for (Map.Entry<String, FlowNode> entry : nodesById.entrySet()) {
+    if (entry.getValue().getParentElement() == sp) {
+        allSubNodes.put(entry.getKey(), entry.getValue());
+    }
+}
+flowFactory.createSequenceFlow(modelInstance, sp, flow, allSubNodes);
+    } else {
+        sequenceFlows.add(flowFactory.createSequenceFlow(modelInstance, process, flow, nodesById));
+    }
+}
             processNodesById.put(processId, nodesById);
             processElementsById.put(processId, elementsById);
             processSequenceFlows.put(processId, sequenceFlows);
-            globalElements.putAll(elementsById);
+            elementsById.forEach((id, element) -> {
+                if (element instanceof FlowNode fn
+                    && !(fn.getParentElement() instanceof Process)) {
+                   return;
+                }
+                if (!(element instanceof FlowNode)
+                    && !(element.getParentElement() instanceof Process)) {
+                  return;
+                }
+                globalElements.put(id, element);
+            });
         }
 
         for (ParticipantDTO participantDTO : collaborationDTO.getParticipants()) {
@@ -343,63 +413,142 @@ public class JsonToBpmnConverter {
             double poolY = COLLAB_POOL_START_Y + (i * (COLLAB_POOL_HEIGHT + COLLAB_POOL_GAP_Y));
             createParticipantShape(modelInstance, plane, participant, poolY, usedDiIds);
 
+            Process participantProcess = participant.getProcess();
             Map<String, FlowNode> nodesById = processNodesById.getOrDefault(processRef, Map.of());
             List<SequenceFlow> sequenceFlows = processSequenceFlows.getOrDefault(processRef, List.of());
-            if (nodesById.isEmpty()) continue;
+            Map<String, FlowNode> topLevelNodes = filterTopLevelProcessNodes(participantProcess, nodesById);
+            List<SequenceFlow> topLevelFlows = filterTopLevelSequenceFlows(participantProcess, sequenceFlows, topLevelNodes);
+            if (topLevelNodes.isEmpty()) continue;
 
             globalNodeLayouts.clear();
-            computeContainerSizesBottomUp(nodesById);
-            Map<String, NodeLayout> nodeLayouts = assignPositionsTopDown(nodesById, sequenceFlows);
-            globalNodeLayouts.putAll(nodeLayouts);
+            computeContainerSizesBottomUp(topLevelNodes, true);
+            Map<String, NodeLayout> processLayouts = assignPositionsTopDown(topLevelNodes, topLevelFlows);
+            globalNodeLayouts.putAll(processLayouts);
 
-            GraphIndex graph = buildGraphIndex(nodesById, sequenceFlows);
-            Map<String, Integer> levels = calculateLevels(nodesById.keySet(), graph);
-            Map<Integer, List<FlowNode>> nodesByLevel = groupNodesByLevel(nodesById.values(), levels);
+            GraphIndex graph = buildGraphIndex(topLevelNodes, topLevelFlows);
+            Map<String, Integer> levels = calculateLevels(topLevelNodes.keySet(), graph);
+            Map<Integer, List<FlowNode>> nodesByLevel = groupNodesByLevel(topLevelNodes.values(), levels);
             Map<String, Integer> levelByNodeId = new HashMap<>();
-            nodesByLevel.forEach((lvl, nodes) -> nodes.forEach(n -> levelByNodeId.put(n.getId(), lvl)));
-            resolveContainerOverlaps(nodeLayouts, nodesByLevel, levelByNodeId);
+            nodesByLevel.forEach((lvl, levelNodes) -> levelNodes.forEach(n -> levelByNodeId.put(n.getId(), lvl)));
+            resolveContainerOverlaps(processLayouts, nodesByLevel, levelByNodeId);
 
             double processCenterY = poolY + COLLAB_CONTENT_CENTER_Y_OFFSET;
-            double currentCenterY = nodeLayouts.values().stream().mapToDouble(NodeLayout::centerY).average().orElse(processCenterY);
+            double currentCenterY = processLayouts.values().stream().mapToDouble(NodeLayout::centerY).average().orElse(processCenterY);
             double yOffset = processCenterY - currentCenterY;
-            Map<String, NodeLayout> shiftedNodeLayouts = new LinkedHashMap<>();
-            for (Map.Entry<String, NodeLayout> entry : nodeLayouts.entrySet()) {
+
+
+           Map<String, NodeLayout> shiftedNodeLayouts = new LinkedHashMap<>();
+           for (Map.Entry<String, NodeLayout> entry : processLayouts.entrySet()) {
                 NodeLayout l = entry.getValue();
-                shiftedNodeLayouts.put(entry.getKey(), new NodeLayout(l.x(), l.y() + yOffset, l.width(), l.height()));
+                FlowNode node = nodesById.get(entry.getKey());
+                if (node != null && !(node.getParentElement() instanceof Process)) {
+                    continue;
+                }
+                shiftedNodeLayouts.put(entry.getKey(),
+                    new NodeLayout(l.x(), l.y() + yOffset, l.width(), l.height()));
             }
-            globalLayouts.putAll(shiftedNodeLayouts);
+
+            globalLayouts.putAll(shiftedNodeLayouts); 
+            
 
             Map<String, BaseElement> elementsById = processElementsById.getOrDefault(processRef, Map.of());
-            Map<String, NodeLayout> artifactLayouts = computeArtifactLayouts(elementsById, List.of(), shiftedNodeLayouts);
+
+            Map<String, BaseElement> topLevelArtifacts = new LinkedHashMap<>();
+            elementsById.forEach((id, element) -> {
+                if (element instanceof FlowNode) return;
+                if (!(element.getParentElement() instanceof Process)) return;
+                topLevelArtifacts.put(id, element);
+            });
+
+            Map<String, NodeLayout> artifactLayouts = computeArtifactLayouts(topLevelArtifacts, List.of(), shiftedNodeLayouts);
+
             globalLayouts.putAll(artifactLayouts);
+            
+ 
         }
 
-        for (Map<String, FlowNode> nodes : processNodesById.values()) {
-            for (FlowNode node : nodes.values()) {
-                NodeLayout layout = globalLayouts.get(node.getId());
-                if (layout != null) {
-                    createBpmnShape(modelInstance, plane, node, layout, usedDiIds);
-                }
+        for (Participant participant : participants) {
+
+        Process participantProcess = participant.getProcess();
+
+        if (participantProcess == null) {
+           continue;
+        }
+
+        String processRef = participantProcess.getId();
+
+        Map<String, FlowNode> nodesById = processNodesById.getOrDefault(processRef, Map.of());
+        Map<String, FlowNode> topLevelNodes =  filterTopLevelProcessNodes(participantProcess, nodesById);
+        for (FlowNode node : topLevelNodes.values()) {
+        NodeLayout layout = globalLayouts.get(node.getId());
+
+            if (layout != null) {
+            createBpmnShape(
+                    modelInstance,
+                    plane,
+                    node,
+                    layout,
+                    usedDiIds
+                );
             }
         }
+    }
         for (Map.Entry<String, Map<String, BaseElement>> entry : processElementsById.entrySet()) {
             for (BaseElement element : entry.getValue().values()) {
-                if (element instanceof FlowNode) continue;
-                NodeLayout layout = globalLayouts.get(element.getId());
-                if (layout != null) {
-                    createBpmnShape(modelInstance, plane, element, layout, usedDiIds);
-                }
+
+             if (element instanceof FlowNode) {
+              continue;
+             }
+
+             if (!(element.getParentElement() instanceof Process)) {
+              continue;
+             }
+
+             NodeLayout layout = globalLayouts.get(element.getId());
+
+             if (layout != null) {
+               createBpmnShape(
+                modelInstance,
+                plane,
+                element,
+                layout,
+                usedDiIds
+               );
+             }
             }
         }
-        for (Map.Entry<String, List<SequenceFlow>> entry : processSequenceFlows.entrySet()) {
-            for (SequenceFlow flow : entry.getValue()) {
+        
+        for (Participant participant : participants) {
+            Process participantProcess = participant.getProcess();
+            if (participantProcess == null) continue;
+            String processRef = participantProcess.getId();
+            Map<String, FlowNode> nodesById = processNodesById.getOrDefault(processRef, Map.of());
+            List<SequenceFlow> sequenceFlows = processSequenceFlows.getOrDefault(processRef, List.of());
+            Map<String, FlowNode> topLevelNodes = filterTopLevelProcessNodes(participantProcess, nodesById);
+            List<SequenceFlow> topLevelFlows = filterTopLevelSequenceFlows(participantProcess, sequenceFlows, topLevelNodes);
+            for (SequenceFlow flow : topLevelFlows) {
                 createBpmnEdgeRouted(modelInstance, plane, flow, globalLayouts, usedDiIds);
             }
         }
         for (BaseElement edge : messageFlows) {
             createGenericBpmnEdge(modelInstance, plane, edge, globalLayouts, usedDiIds);
         }
+        for (Participant participant : participants) {
+    Process participantProcess = participant.getProcess();
+    if (participantProcess == null) continue;
+    String processRef = participantProcess.getId();
+    Map<String, FlowNode> nodesById = processNodesById.getOrDefault(processRef, Map.of());
+    createCollapsedSubProcessDiagrams(
+            modelInstance,
+            definitions,
+            nodesById.values(),
+            usedDiIds,
+            globalLayouts
+    );
+}
+        
     }
+
 
     private void createParticipantShape(
             BpmnModelInstance modelInstance,
@@ -543,6 +692,7 @@ public class JsonToBpmnConverter {
      * PASS 2 — Neighbor displacement: push right-neighbors away from grown containers
      * PASS 3+4 — Orthogonal edge routing and BPMN DI generation
      */
+ 
     private void applyCamundaModelApiLayout(
             BpmnModelInstance modelInstance,
             Process process,
@@ -558,18 +708,22 @@ public class JsonToBpmnConverter {
 
             Set<String> usedDiIds = new HashSet<>();
 
+            Map<String, FlowNode> topLevelNodes = filterTopLevelProcessNodes(process, nodesById);
+            List<SequenceFlow> topLevelFlows = filterTopLevelSequenceFlows(process, sequenceFlows, topLevelNodes);
+
             // ── PASS 0: Bottom-up size computation ──────────────────────────
             globalNodeLayouts.clear();
-            computeContainerSizesBottomUp(nodesById);
+            computeContainerSizesBottomUp(topLevelNodes, true);
 
             // ── PASS 1: Top-down position assignment using final sizes ───────
-            Map<String, NodeLayout> nodeLayouts = assignPositionsTopDown(nodesById, sequenceFlows);
+            Map<String, NodeLayout> nodeLayouts = assignPositionsTopDown(topLevelNodes, topLevelFlows);
             globalNodeLayouts.putAll(nodeLayouts);
 
             // ── PASS 2: Neighbor displacement ────────────────────────────────
-            GraphIndex graph = buildGraphIndex(nodesById, sequenceFlows);
-            Map<String, Integer> levels = calculateLevels(nodesById.keySet(), graph);
-            Map<Integer, List<FlowNode>> nodesByLevel = groupNodesByLevel(nodesById.values(), levels);
+        
+            GraphIndex graph = buildGraphIndex(topLevelNodes, topLevelFlows);
+            Map<String, Integer> levels = calculateLevels(topLevelNodes.keySet(), graph);
+            Map<Integer, List<FlowNode>> nodesByLevel = groupNodesByLevel(topLevelNodes.values(), levels);
             Map<String, Integer> levelByNodeId = new HashMap<>();
             nodesByLevel.forEach((lvl, nodes) -> nodes.forEach(n -> levelByNodeId.put(n.getId(), lvl)));
 
@@ -590,7 +744,7 @@ public class JsonToBpmnConverter {
             Map<String, NodeLayout> allLayouts = new LinkedHashMap<>(nodeLayouts);
             allLayouts.putAll(computeArtifactLayouts(elementsById, extraEdges, nodeLayouts));
 
-            for (FlowNode node : nodesById.values()) {
+            for (FlowNode node : topLevelNodes.values()) {
                 createBpmnShape(modelInstance, plane, node, allLayouts.get(node.getId()), usedDiIds);
             }
             for (BaseElement element : elementsById.values()) {
@@ -598,16 +752,15 @@ public class JsonToBpmnConverter {
                     createBpmnShape(modelInstance, plane, element, allLayouts.get(element.getId()), usedDiIds);
                 }
             }
-            for (SequenceFlow sequenceFlow : sequenceFlows) {
+
+            for (SequenceFlow sequenceFlow : topLevelFlows) {
                 createBpmnEdgeRouted(modelInstance, plane, sequenceFlow, allLayouts, usedDiIds);
             }
             for (BaseElement edge : extraEdges) {
                 createGenericBpmnEdge(modelInstance, plane, edge, allLayouts, usedDiIds);
             }
-            renderExpandedAdHocContents(modelInstance, plane, nodesById.values(), nodeLayouts, usedDiIds);
-
-            createCollapsedSubProcessDiagrams(modelInstance, definitions, nodesById.values(),
-                    usedDiIds, nodeLayouts);
+            createCollapsedSubProcessDiagrams( modelInstance, definitions, topLevelNodes.values(), usedDiIds, allLayouts );
+            
 
         } catch (BpmnModelException ex) {
             throw new IllegalArgumentException("Unable to generate BPMN diagram layout", ex);
@@ -624,31 +777,32 @@ public class JsonToBpmnConverter {
      * No positions are assigned here — only width and height.
      */
     private void computeContainerSizesBottomUp(Map<String, FlowNode> nodesById) {
-        for (FlowNode node : nodesById.values()) {
-            if (!(node instanceof SubProcess subProcess)) continue;
+    computeContainerSizesBottomUp(nodesById, false);
+}
 
-            Map<String, FlowNode> children = collectChildNodes(subProcess);
-            List<SequenceFlow> childFlows  = collectChildFlows(subProcess);
+private void computeContainerSizesBottomUp(Map<String, FlowNode> nodesById, boolean forceCollapsed) {
+    for (FlowNode node : nodesById.values()) {
+        if (!(node instanceof SubProcess subProcess)) continue;
 
-            if (children.isEmpty()) {
-                // Empty or collapsed subprocess — use fixed collapsed dimensions
-                globalNodeLayouts.put(subProcess.getId(),
-                        new NodeLayout(0, 0, SUBPROCESS_COLLAPSED_WIDTH, SUBPROCESS_COLLAPSED_HEIGHT));
-                continue;
-            }
+        Map<String, FlowNode> children = collectChildNodes(subProcess);
+        List<SequenceFlow> childFlows  = collectChildFlows(subProcess);
 
-            // CRITICAL: recurse first so child containers are sized before the parent is measured
-            computeContainerSizesBottomUp(children);
+        if (children.isEmpty() || forceCollapsed) {
+            globalNodeLayouts.put(subProcess.getId(),
+                    new NodeLayout(0, 0, SUBPROCESS_COLLAPSED_WIDTH, SUBPROCESS_COLLAPSED_HEIGHT));
+            continue;
+        }
 
-            if (adHocSubProcessIds.contains(subProcess.getId())) {
-                globalNodeLayouts.put(subProcess.getId(), measureAdHocContainer(children));
-            } else {
-                globalNodeLayouts.put(subProcess.getId(),
-                        measureExpandedSubProcessContainer(children, childFlows));
-            }
+        computeContainerSizesBottomUp(children);
+
+        if (adHocSubProcessIds.contains(subProcess.getId())) {
+            globalNodeLayouts.put(subProcess.getId(), measureAdHocContainer(children));
+        } else {
+            globalNodeLayouts.put(subProcess.getId(),
+                    measureExpandedSubProcessContainer(children, childFlows));
         }
     }
-
+}
     /**
      * Measures an expanded subprocess by running a layout in local (left-padding, top-padding)
      * space, computing the bounding box of all children, then adding container padding.
@@ -849,9 +1003,15 @@ for (int levelIdx = 0; levelIdx < sortedLevels.size() - 1; levelIdx++) {
             Collection<FlowNode> nodes,
             Set<String> usedDiIds,
             Map<String, NodeLayout> parentLayouts) {
+                
 
         for (FlowNode node : nodes) {
             if (node instanceof SubProcess subProcess) {
+                Map<String, FlowNode> children = collectChildNodes(subProcess);
+
+                if (children.isEmpty()) {
+                  continue;
+                }
                 if (adHocSubProcessIds.contains(subProcess.getId())) {
                     continue;
                 }
@@ -863,50 +1023,54 @@ for (int levelIdx = 0; levelIdx < sortedLevels.size() - 1; levelIdx++) {
     }
 
     private void createSubProcessDiagram(
-            BpmnModelInstance modelInstance,
-            Definitions definitions,
-            SubProcess subProcess,
-            Set<String> usedDiIds,
-            Map<String, NodeLayout> parentLayouts) {
+        BpmnModelInstance modelInstance,
+        Definitions definitions,
+        SubProcess subProcess,
+        Set<String> usedDiIds,
+        Map<String, NodeLayout> parentLayouts) {
 
-        Map<String, FlowNode> subNodes = new LinkedHashMap<>();
-        List<SequenceFlow> subFlows    = new ArrayList<>();
+    Map<String, FlowNode> subNodes = new LinkedHashMap<>();
+    List<SequenceFlow> subFlows = new ArrayList<>();
 
-        for (FlowElement element : subProcess.getFlowElements()) {
-            if (element instanceof FlowNode node)   subNodes.put(node.getId(), node);
-            if (element instanceof SequenceFlow flow) subFlows.add(flow);
-        }
-        if (subNodes.isEmpty()) return;
-
-        BpmnDiagram diagram = modelInstance.newInstance(BpmnDiagram.class);
-        diagram.setId(stableDiId("BPMNDiagram", subProcess.getId(), modelInstance, usedDiIds));
-        BpmnPlane plane = modelInstance.newInstance(BpmnPlane.class);
-        plane.setId(stableDiId("BPMNPlane", subProcess.getId(), modelInstance, usedDiIds));
-        plane.setBpmnElement(subProcess);
-        diagram.setBpmnPlane(plane);
-        definitions.addChildElement(diagram);
-
-        NodeLayout parentLayout = parentLayouts.get(subProcess.getId());
-        Map<String, NodeLayout> subLayouts;
-
-        if (adHocSubProcessIds.contains(subProcess.getId())) {
-            // parentLayout carries the final (x,y,w,h) from PASS 1+2
-            subLayouts = calculateAdHocLayouts(subNodes, subProcess, parentLayout);
-        } else {
-            subLayouts = calculateSubProcessLayouts(subNodes, subFlows, parentLayout);
-        }
-
-        for (FlowNode node : subNodes.values()) {
-            createBpmnShape(modelInstance, plane, node, subLayouts.get(node.getId()), usedDiIds);
-        }
-        for (SequenceFlow flow : subFlows) {
-            createBpmnEdgeRouted(modelInstance, plane, flow, subLayouts, usedDiIds);
-        }
-
-        // Recurse for nested SubProcess / Transaction / AdHoc at any depth
-        createCollapsedSubProcessDiagrams(modelInstance, definitions, subNodes.values(),
-                usedDiIds, subLayouts);
+    for (FlowElement element : subProcess.getFlowElements()) {
+        if (element instanceof FlowNode node) subNodes.put(node.getId(), node);
+        if (element instanceof SequenceFlow flow) subFlows.add(flow);
     }
+    if (subNodes.isEmpty()) return;
+
+    NodeLayout parentLayout = parentLayouts.get(subProcess.getId());
+    if (parentLayout == null) return;
+
+    BpmnDiagram diagram = modelInstance.newInstance(BpmnDiagram.class);
+    diagram.setId(stableDiId("BPMNDiagram", subProcess.getId(), modelInstance, usedDiIds));
+    BpmnPlane plane = modelInstance.newInstance(BpmnPlane.class);
+    plane.setId(stableDiId("BPMNPlane", subProcess.getId(), modelInstance, usedDiIds));
+    plane.setBpmnElement(subProcess);
+    diagram.setBpmnPlane(plane);
+    definitions.addChildElement(diagram);
+
+    Map<String, NodeLayout> subLayouts;
+    if (adHocSubProcessIds.contains(subProcess.getId())) {
+        NodeLayout localParentLayout = new NodeLayout(0, 0, parentLayout.width(), parentLayout.height());
+        subLayouts = calculateAdHocLayouts(subNodes, subProcess, localParentLayout);
+    } else {
+        // Compute real expanded size from children — ignore the collapsed size stored in parentLayouts
+        NodeLayout expandedSize = measureExpandedSubProcessContainer(subNodes, subFlows);
+        NodeLayout localParentLayout = new NodeLayout(0, 0, expandedSize.width(), expandedSize.height());
+        subLayouts = calculateSubProcessLayouts(subNodes, subFlows, localParentLayout);
+    }
+
+    for (FlowNode node : subNodes.values()) {
+        createBpmnShape(modelInstance, plane, node, subLayouts.get(node.getId()), usedDiIds);
+    }
+    for (SequenceFlow flow : subFlows) {
+        createBpmnEdgeRouted(modelInstance, plane, flow, subLayouts, usedDiIds);
+    }
+
+    createCollapsedSubProcessDiagrams(modelInstance, definitions, subNodes.values(),
+            usedDiIds, subLayouts);
+            
+}
 
     private void createTransactionDiagram(
             BpmnModelInstance modelInstance,
@@ -966,7 +1130,7 @@ for (int levelIdx = 0; levelIdx < sortedLevels.size() - 1; levelIdx++) {
             List<FlowNode> levelNodes = entry.getValue();
             double verticalGap   = verticalGapFor(levelNodes);
             double totalHeight   = totalLevelHeight(levelNodes, verticalGap);
-            double y             = Math.max(START_Y, centerY - (totalHeight / 2));
+            double y             = Math.max(0, centerY - (totalHeight / 2));
 
             for (FlowNode node : levelNodes) {
                 double width  = getNodeWidth(node);
@@ -1287,9 +1451,10 @@ for (int levelIdx = 0; levelIdx < sortedLevels.size() - 1; levelIdx++) {
         shape.setBpmnElement(node);
 
         if (node instanceof SubProcess) {
-            shape.setExpanded(false);
-            shape.setHorizontal(true);
+           shape.setExpanded(false);
+           shape.setHorizontal(true);
         }
+
         if (node instanceof Transaction) {
             shape.setExpanded(adHocSubProcessIds.contains(node.getId()));
             shape.setHorizontal(true);
@@ -1380,41 +1545,6 @@ for (int levelIdx = 0; levelIdx < sortedLevels.size() - 1; levelIdx++) {
             }
         }
         return false;
-    }
-    private void renderExpandedAdHocContents(
-            BpmnModelInstance modelInstance,
-            BpmnPlane plane,
-            Collection<FlowNode> nodes,
-            Map<String, NodeLayout> parentLayouts,
-            Set<String> usedDiIds) {
-
-        for (FlowNode node : nodes) {
-            if (!(node instanceof SubProcess subProcess)) {
-                continue;
-            }
-            if (!adHocSubProcessIds.contains(subProcess.getId())) {
-                continue;
-            }
-
-            Map<String, FlowNode> childNodes = collectChildNodes(subProcess);
-            if (childNodes.isEmpty()) {
-                continue;
-            }
-            List<SequenceFlow> childFlows = collectChildFlows(subProcess);
-
-            NodeLayout parentLayout = parentLayouts.get(subProcess.getId());
-            Map<String, NodeLayout> adHocLayouts = calculateAdHocLayouts(childNodes, subProcess, parentLayout);
-
-            for (FlowNode childNode : childNodes.values()) {
-                createBpmnShape(modelInstance, plane, childNode, adHocLayouts.get(childNode.getId()), usedDiIds);
-            }
-            for (SequenceFlow childFlow : childFlows) {
-                createBpmnEdgeRouted(modelInstance, plane, childFlow, adHocLayouts, usedDiIds);
-            }
-
-            // recurse to support nested adhoc subprocesses
-            renderExpandedAdHocContents(modelInstance, plane, childNodes.values(), adHocLayouts, usedDiIds);
-        }
     }
     // =====================================================
     // PASS 3 — OBSTACLE-AWARE ORTHOGONAL EDGE ROUTING
@@ -1763,6 +1893,40 @@ for (int levelIdx = 0; levelIdx < sortedLevels.size() - 1; levelIdx++) {
                 || node instanceof EventBasedGateway
                 || node instanceof ComplexGateway;
     }
+    private Map<String, FlowNode> filterTopLevelProcessNodes(Process process, Map<String, FlowNode> nodesById) {
+        if (process == null || nodesById == null || nodesById.isEmpty()) return Map.of();
+        Map<String, FlowNode> topLevel = new LinkedHashMap<>();
+        for (Map.Entry<String, FlowNode> entry : nodesById.entrySet()) {
+            FlowNode node = entry.getValue();
+            if (node != null && node.getParentElement() == process) {
+                topLevel.put(entry.getKey(), node);
+            }
+        }
+        return topLevel;
+    }
+
+    private List<SequenceFlow> filterTopLevelSequenceFlows(
+            Process process,
+            List<SequenceFlow> sequenceFlows,
+            Map<String, FlowNode> topLevelNodes) {
+
+        if (process == null || sequenceFlows == null || sequenceFlows.isEmpty() || topLevelNodes.isEmpty()) {
+            return List.of();
+        }
+
+        List<SequenceFlow> filtered = new ArrayList<>();
+        for (SequenceFlow flow : sequenceFlows) {
+            if (flow == null || flow.getSource() == null || flow.getTarget() == null) continue;
+            String sourceId = flow.getSource().getId();
+            String targetId = flow.getTarget().getId();
+            if (!topLevelNodes.containsKey(sourceId) || !topLevelNodes.containsKey(targetId)) continue;
+            if (flow.getParentElement() != process) continue;
+            filtered.add(flow);
+        }
+        return filtered;
+    }
+
+    
 
     // =====================================================
     // CHILD NODE / FLOW COLLECTION HELPERS

@@ -25,6 +25,7 @@ public class ElementDTO {
     private Boolean cancelRemainingInstances;
     private String completionCondition;
     private Boolean adHoc;
+    private String parentId;
 
     private List<Map<String, String>> in;
 
@@ -156,5 +157,14 @@ public class ElementDTO {
     public void setAdHoc(Boolean adHoc) {
        this.adHoc = adHoc;
     }
+   
+
+    public String getParentId() {
+    return parentId;
+    }
+
+   public void setParentId(String parentId) {
+    this.parentId = parentId;
+}
 
 }

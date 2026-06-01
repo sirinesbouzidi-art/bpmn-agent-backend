@@ -173,4 +173,11 @@ public class SubProcessFactory {
     private List<FlowDTO> safeFlows(ElementDTO element) {
         return element.getFlows() == null ? Collections.emptyList() : element.getFlows();
     }
+
+    public FlowNode createChildNodePublic(
+        BpmnModelInstance modelInstance,
+        SubProcess parentSubProcess,
+        ElementDTO element) {
+    return createChildNode(modelInstance, parentSubProcess, element);
+}
 }

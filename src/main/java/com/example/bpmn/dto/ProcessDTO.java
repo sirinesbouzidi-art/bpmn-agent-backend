@@ -18,6 +18,9 @@ public class ProcessDTO {
 
     @Valid
     private List<FlowDTO> flows = new ArrayList<>();
+    
+    @Valid
+    private List<LaneDTO> lanes;
 
     public String getId() {
         return id;
@@ -49,5 +52,13 @@ public class ProcessDTO {
 
     public void setFlows(List<FlowDTO> flows) {
         this.flows = flows;
+    }
+
+    public List<LaneDTO> getLanes() {
+        return lanes;
+    }
+
+    public void setLanes(List<LaneDTO> lanes) {
+        this.lanes = lanes;
     }
 }

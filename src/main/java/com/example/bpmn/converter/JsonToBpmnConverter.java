@@ -5,6 +5,7 @@ import com.example.bpmn.dto.CollaborationDTO;
 import com.example.bpmn.dto.ElementDTO;
 import com.example.bpmn.dto.ParticipantDTO;
 import com.example.bpmn.dto.FlowDTO;
+import com.example.bpmn.dto.LaneDTO;
 import com.example.bpmn.dto.ProcessDTO;
 import com.example.bpmn.factory.event.EventFactory;
 import com.example.bpmn.factory.flow.FlowFactory;
@@ -31,6 +32,8 @@ import org.camunda.bpm.model.bpmn.instance.Association;
 import org.camunda.bpm.model.bpmn.instance.MessageFlow;
 import org.camunda.bpm.model.bpmn.instance.InclusiveGateway;
 import org.camunda.bpm.model.bpmn.instance.ParallelGateway;
+import org.camunda.bpm.model.bpmn.instance.Lane;
+import org.camunda.bpm.model.bpmn.instance.LaneSet;
 import org.camunda.bpm.model.bpmn.instance.Participant;
 import org.camunda.bpm.model.bpmn.instance.Process;
 import org.camunda.bpm.model.bpmn.instance.SequenceFlow;
@@ -78,8 +81,8 @@ public class JsonToBpmnConverter {
 
     private static final double START_X                        = 160;
     private static final double START_Y                        = 220;
-    private static final double HORIZONTAL_GAP                 = 300;
-    private static final double MIN_VERTICAL_GAP               = 190;
+    private static final double HORIZONTAL_GAP                 = 350;
+    private static final double MIN_VERTICAL_GAP               = 220;
     private static final double LANE_PADDING                   = 70;
     private static final double EVENT_SIZE                     = 36;
     private static final double GATEWAY_SIZE                   = 50;
@@ -108,11 +111,12 @@ public class JsonToBpmnConverter {
     private static final double SUBPROCESS_TITLE_CLEARANCE     = 30;
     private static final double CONTAINER_RIGHT_NEIGHBOR_GAP   = 60;
     private static final double COLLAB_POOL_X                  = 80;
-    private static final double COLLAB_POOL_WIDTH              = 2800;
+    private static final double COLLAB_POOL_WIDTH              = 3200;
     private static final double COLLAB_POOL_HEIGHT             = 550;
     private static final double COLLAB_POOL_START_Y            = 100;
     private static final double COLLAB_POOL_GAP_Y              = 80;
     private static final double COLLAB_CONTENT_CENTER_Y_OFFSET = 200;
+    private static final double LANE_LABEL_COLUMN_WIDTH        = 30;
     private static final Pattern NON_ID_CHARACTER              = Pattern.compile("[^A-Za-z0-9_.-]");
 
     // =====================================================
@@ -224,8 +228,9 @@ for (ElementDTO element : elements) {
     nodesById.put(child.getId(), child);
     elementsById.put(child.getId(), child);
 }
+    createLanes(modelInstance, process, processDTO.getLanes(), nodesById);    
 
-        List<SequenceFlow> sequenceFlows = new ArrayList<>();
+    List<SequenceFlow> sequenceFlows = new ArrayList<>();
 List<BaseElement> nonSequenceFlows = new ArrayList<>();
 for (FlowDTO flow : getFlows(request, processDTO)) {
     String flowType = flow.getType() == null ? "sequenceFlow" : flow.getType();
@@ -319,7 +324,9 @@ for (ElementDTO element : elements) {
     nodesById.put(child.getId(), child);
     elementsById.put(child.getId(), child);
 }
-            List<SequenceFlow> sequenceFlows = new ArrayList<>();
+        createLanes(modelInstance, process, processDTO.getLanes(), nodesById);
+
+        List<SequenceFlow> sequenceFlows = new ArrayList<>();
 for (FlowDTO flow : processDTO.getFlows() == null ? List.<FlowDTO>of() : processDTO.getFlows()) {
     FlowNode source = nodesById.get(flow.getFrom());
     FlowNode target = nodesById.get(flow.getTo());
@@ -406,66 +413,71 @@ flowFactory.createSequenceFlow(modelInstance, sp, flow, allSubNodes);
         List<Participant> participants = new ArrayList<>(collaboration.getParticipants());
 
         for (int i = 0; i < participants.size(); i++) {
-            Participant participant = participants.get(i);
-            String processRef = participant.getProcess() == null ? null : participant.getProcess().getId();
-            if (processRef == null) continue;
+    Participant participant = participants.get(i);
+    String processRef = participant.getProcess() == null ? null : participant.getProcess().getId();
+    if (processRef == null) continue;
 
-            double poolY = COLLAB_POOL_START_Y + (i * (COLLAB_POOL_HEIGHT + COLLAB_POOL_GAP_Y));
-            createParticipantShape(modelInstance, plane, participant, poolY, usedDiIds);
+    double poolY = COLLAB_POOL_START_Y + (i * (COLLAB_POOL_HEIGHT + COLLAB_POOL_GAP_Y));
 
-            Process participantProcess = participant.getProcess();
-            Map<String, FlowNode> nodesById = processNodesById.getOrDefault(processRef, Map.of());
-            List<SequenceFlow> sequenceFlows = processSequenceFlows.getOrDefault(processRef, List.of());
-            Map<String, FlowNode> topLevelNodes = filterTopLevelProcessNodes(participantProcess, nodesById);
-            List<SequenceFlow> topLevelFlows = filterTopLevelSequenceFlows(participantProcess, sequenceFlows, topLevelNodes);
-            if (topLevelNodes.isEmpty()) continue;
+    Process participantProcess = participant.getProcess();
+    Map<String, FlowNode> nodesById = processNodesById.getOrDefault(processRef, Map.of());
+    List<SequenceFlow> sequenceFlows = processSequenceFlows.getOrDefault(processRef, List.of());
+    Map<String, FlowNode> topLevelNodes = filterTopLevelProcessNodes(participantProcess, nodesById);
+    List<SequenceFlow> topLevelFlows = filterTopLevelSequenceFlows(participantProcess, sequenceFlows, topLevelNodes);
 
-            globalNodeLayouts.clear();
-            computeContainerSizesBottomUp(topLevelNodes, true);
-            Map<String, NodeLayout> processLayouts = assignPositionsTopDown(topLevelNodes, topLevelFlows);
-            globalNodeLayouts.putAll(processLayouts);
+    globalNodeLayouts.clear();
+    computeContainerSizesBottomUp(topLevelNodes, true);
+    Map<String, NodeLayout> processLayouts = assignPositionsTopDown(topLevelNodes, topLevelFlows);
+    globalNodeLayouts.putAll(processLayouts);
 
-            GraphIndex graph = buildGraphIndex(topLevelNodes, topLevelFlows);
-            Map<String, Integer> levels = calculateLevels(topLevelNodes.keySet(), graph);
-            Map<Integer, List<FlowNode>> nodesByLevel = groupNodesByLevel(topLevelNodes.values(), levels);
-            Map<String, Integer> levelByNodeId = new HashMap<>();
-            nodesByLevel.forEach((lvl, levelNodes) -> levelNodes.forEach(n -> levelByNodeId.put(n.getId(), lvl)));
-            resolveContainerOverlaps(processLayouts, nodesByLevel, levelByNodeId);
+    GraphIndex graph = buildGraphIndex(topLevelNodes, topLevelFlows);
+    Map<String, Integer> levels = calculateLevels(topLevelNodes.keySet(), graph);
+    Map<Integer, List<FlowNode>> nodesByLevel = groupNodesByLevel(topLevelNodes.values(), levels);
+    Map<String, Integer> levelByNodeId = new HashMap<>();
+    nodesByLevel.forEach((lvl, levelNodes) -> levelNodes.forEach(n -> levelByNodeId.put(n.getId(), lvl)));
+    resolveContainerOverlaps(processLayouts, nodesByLevel, levelByNodeId);
 
-            double processCenterY = poolY + COLLAB_CONTENT_CENTER_Y_OFFSET;
-            double currentCenterY = processLayouts.values().stream().mapToDouble(NodeLayout::centerY).average().orElse(processCenterY);
-            double yOffset = processCenterY - currentCenterY;
+    double processCenterY = poolY + COLLAB_CONTENT_CENTER_Y_OFFSET;
+    double currentCenterY = processLayouts.values().stream().mapToDouble(NodeLayout::centerY).average().orElse(processCenterY);
+    double yOffset = processCenterY - currentCenterY;
 
+    Map<String, NodeLayout> shiftedNodeLayouts = new LinkedHashMap<>();
+    for (Map.Entry<String, NodeLayout> entry : processLayouts.entrySet()) {
+        NodeLayout l = entry.getValue();
+        FlowNode node = nodesById.get(entry.getKey());
+        if (node != null && !(node.getParentElement() instanceof Process)) continue;
+        shiftedNodeLayouts.put(entry.getKey(),
+                new NodeLayout(l.x(), l.y() + yOffset, l.width(), l.height()));
+    }
 
-           Map<String, NodeLayout> shiftedNodeLayouts = new LinkedHashMap<>();
-           for (Map.Entry<String, NodeLayout> entry : processLayouts.entrySet()) {
-                NodeLayout l = entry.getValue();
-                FlowNode node = nodesById.get(entry.getKey());
-                if (node != null && !(node.getParentElement() instanceof Process)) {
-                    continue;
-                }
-                shiftedNodeLayouts.put(entry.getKey(),
-                    new NodeLayout(l.x(), l.y() + yOffset, l.width(), l.height()));
-            }
+    // ── compute dynamic pool width from actual node positions ──
+    double maxRight = shiftedNodeLayouts.values().stream()
+            .mapToDouble(NodeLayout::right)
+            .max()
+            .orElse(COLLAB_POOL_X + COLLAB_POOL_WIDTH);
+    double dynamicPoolWidth = Math.max(COLLAB_POOL_WIDTH, maxRight - COLLAB_POOL_X + 100);
 
-            globalLayouts.putAll(shiftedNodeLayouts); 
-            
+    // ── now create participant and lane shapes with correct width ──
+    createParticipantShape(modelInstance, plane, participant, poolY, usedDiIds, dynamicPoolWidth);
+    createLaneShapes(modelInstance, plane, participantProcess, COLLAB_POOL_X, poolY,
+            dynamicPoolWidth, COLLAB_POOL_HEIGHT, usedDiIds);
 
-            Map<String, BaseElement> elementsById = processElementsById.getOrDefault(processRef, Map.of());
+    if (topLevelNodes.isEmpty()) continue;
 
-            Map<String, BaseElement> topLevelArtifacts = new LinkedHashMap<>();
-            elementsById.forEach((id, element) -> {
-                if (element instanceof FlowNode) return;
-                if (!(element.getParentElement() instanceof Process)) return;
-                topLevelArtifacts.put(id, element);
-            });
+    globalLayouts.putAll(shiftedNodeLayouts);
 
-            Map<String, NodeLayout> artifactLayouts = computeArtifactLayouts(topLevelArtifacts, List.of(), shiftedNodeLayouts);
+    repositionNodesInLanes(participantProcess, globalLayouts, poolY, COLLAB_POOL_HEIGHT);
 
-            globalLayouts.putAll(artifactLayouts);
-            
- 
-        }
+    Map<String, BaseElement> elementsById = processElementsById.getOrDefault(processRef, Map.of());
+    Map<String, BaseElement> topLevelArtifacts = new LinkedHashMap<>();
+    elementsById.forEach((id, element) -> {
+        if (element instanceof FlowNode) return;
+        if (!(element.getParentElement() instanceof Process)) return;
+        topLevelArtifacts.put(id, element);
+    });
+    Map<String, NodeLayout> artifactLayouts = computeArtifactLayouts(topLevelArtifacts, List.of(), shiftedNodeLayouts);
+    globalLayouts.putAll(artifactLayouts);
+}
 
         for (Participant participant : participants) {
 
@@ -551,24 +563,215 @@ flowFactory.createSequenceFlow(modelInstance, sp, flow, allSubNodes);
 
 
     private void createParticipantShape(
+        BpmnModelInstance modelInstance,
+        BpmnPlane plane,
+        Participant participant,
+        double poolY,
+        Set<String> usedDiIds,
+        double dynamicWidth) {   // ← add parameter
+
+    BpmnShape participantShape = modelInstance.newInstance(BpmnShape.class);
+    participantShape.setId(stableDiId("BPMNShape", participant.getId(), modelInstance, usedDiIds));
+    participantShape.setBpmnElement(participant);
+    participantShape.setHorizontal(true);
+
+    Bounds bounds = modelInstance.newInstance(Bounds.class);
+    bounds.setX(COLLAB_POOL_X);
+    bounds.setY(poolY);
+    bounds.setWidth(dynamicWidth);
+    bounds.setHeight(COLLAB_POOL_HEIGHT);
+    participantShape.setBounds(bounds);
+    plane.addChildElement(participantShape);
+}
+
+    private void createLanes(
+            BpmnModelInstance modelInstance,
+            Process process,
+            List<LaneDTO> lanes,
+            Map<String, FlowNode> nodesById) {
+        if (lanes == null || lanes.isEmpty()) {
+            return;
+        }
+
+        LaneSet laneSet = modelInstance.newInstance(LaneSet.class);
+        laneSet.setId(process.getId() + "_laneSet");
+        process.getLaneSets().add(laneSet);
+
+        for (LaneDTO laneDTO : lanes) {
+            if (laneDTO == null) {
+                continue;
+            }
+            String laneId = requireText(laneDTO.getId(), "lane id is required");
+            Lane lane = modelInstance.newInstance(Lane.class);
+            lane.setId(laneId);
+            setName(lane, laneDTO.getName());
+
+            if (laneDTO.getElementRefs() != null) {
+                for (String elementRef : laneDTO.getElementRefs()) {
+                    FlowNode flowNode = nodesById.get(elementRef);
+                    if (flowNode != null) {
+                        lane.getFlowNodeRefs().add(flowNode);
+                    }
+                }
+            }
+
+            laneSet.getLanes().add(lane);
+        }
+    }
+
+    private void createSingleProcessLaneShapes(
             BpmnModelInstance modelInstance,
             BpmnPlane plane,
-            Participant participant,
-            double y,
+            Process process,
+            Map<String, NodeLayout> layouts,
             Set<String> usedDiIds) {
-        BpmnShape participantShape = modelInstance.newInstance(BpmnShape.class);
-        participantShape.setId(stableDiId("BPMNShape", participant.getId(), modelInstance, usedDiIds));
-        participantShape.setBpmnElement(participant);
-        participantShape.setHorizontal(true);
+        if (!hasLanes(process)) {
+            return;
+        }
+
+        Bounds poolBounds = calculateSingleProcessPoolBounds(modelInstance, layouts);
+        BpmnShape processShape = modelInstance.newInstance(BpmnShape.class);
+        processShape.setId(stableDiId("BPMNShape", process.getId(), modelInstance, usedDiIds));
+        processShape.setBpmnElement(process);
+        processShape.setHorizontal(true);
+        processShape.setBounds(poolBounds);
+        plane.addChildElement(processShape);
+
+        createLaneShapes(
+                modelInstance,
+                plane,
+                process,
+                poolBounds.getX(),
+                poolBounds.getY(),
+                poolBounds.getWidth(),
+                poolBounds.getHeight(),
+                usedDiIds);
+    }
+
+    private Bounds calculateSingleProcessPoolBounds(BpmnModelInstance modelInstance, Map<String, NodeLayout> layouts) {
+        double minX = layouts.values().stream().mapToDouble(NodeLayout::x).min().orElse(START_X);
+        double minY = layouts.values().stream().mapToDouble(NodeLayout::y).min().orElse(START_Y);
+        double maxRight = layouts.values().stream().mapToDouble(NodeLayout::right).max().orElse(START_X + COLLAB_POOL_WIDTH);
+        double maxBottom = layouts.values().stream().mapToDouble(layout -> layout.y() + layout.height()).max().orElse(START_Y + COLLAB_POOL_HEIGHT);
 
         Bounds bounds = modelInstance.newInstance(Bounds.class);
-        bounds.setX(COLLAB_POOL_X);
-        bounds.setY(y);
-        bounds.setWidth(COLLAB_POOL_WIDTH);
-        bounds.setHeight(COLLAB_POOL_HEIGHT);
-        participantShape.setBounds(bounds);
-        plane.addChildElement(participantShape);
+        bounds.setX(Math.max(0, minX - LANE_LABEL_COLUMN_WIDTH - LANE_PADDING));
+        bounds.setY(Math.max(0, minY - LANE_PADDING));
+        bounds.setWidth(Math.max(COLLAB_POOL_WIDTH, maxRight - bounds.getX() + LANE_PADDING));
+        bounds.setHeight(Math.max(COLLAB_POOL_HEIGHT, maxBottom - bounds.getY() + LANE_PADDING));
+        return bounds;
     }
+
+    private void createLaneShapes(
+            BpmnModelInstance modelInstance,
+            BpmnPlane plane,
+            Process process,
+            double poolX,
+            double poolY,
+            double poolWidth,
+            double poolHeight,
+            Set<String> usedDiIds) {
+        List<Lane> lanes = getProcessLanes(process);
+        if (lanes.isEmpty()) {
+            return;
+        }
+
+        double laneHeight = poolHeight / lanes.size();
+        double laneX = poolX + LANE_LABEL_COLUMN_WIDTH;
+        double laneWidth = poolWidth - LANE_LABEL_COLUMN_WIDTH;
+
+        for (int i = 0; i < lanes.size(); i++) {
+            Lane lane = lanes.get(i);
+            BpmnShape laneShape = modelInstance.newInstance(BpmnShape.class);
+            laneShape.setId(stableDiId("BPMNShape", lane.getId(), modelInstance, usedDiIds));
+            laneShape.setBpmnElement(lane);
+            laneShape.setHorizontal(true);
+
+            Bounds bounds = modelInstance.newInstance(Bounds.class);
+            bounds.setX(laneX);
+            bounds.setY(poolY + (i * laneHeight));
+            bounds.setWidth(laneWidth);
+            bounds.setHeight(laneHeight);
+            laneShape.setBounds(bounds);
+            plane.addChildElement(laneShape);
+        }
+    }
+
+    private boolean hasLanes(Process process) {
+        return !getProcessLanes(process).isEmpty();
+    }
+
+    private List<Lane> getProcessLanes(Process process) {
+        List<Lane> lanes = new ArrayList<>();
+        for (LaneSet laneSet : process.getLaneSets()) {
+            lanes.addAll(laneSet.getLanes());
+        }
+        return lanes;
+    }
+    
+    private void repositionNodesInLanes(
+        Process process,
+        Map<String, NodeLayout> layouts,
+        double poolY,
+        double poolHeight) {
+
+    List<Lane> lanes = getProcessLanes(process);
+    if (lanes.isEmpty()) return;
+
+    int laneCount = lanes.size();
+    double laneHeight = poolHeight / laneCount;
+
+    for (int i = 0; i < laneCount; i++) {
+        Lane lane = lanes.get(i);
+        double laneTop     = poolY + (i * laneHeight);
+        double laneBottom  = laneTop + laneHeight;
+        double laneCenterY = (laneTop + laneBottom) / 2.0;
+
+        // Collect nodes in this lane that have a layout
+        List<Map.Entry<String, NodeLayout>> laneNodes = new ArrayList<>();
+        for (FlowNode node : lane.getFlowNodeRefs()) {
+            NodeLayout current = layouts.get(node.getId());
+            if (current == null) continue;
+            laneNodes.add(Map.entry(node.getId(), current));
+        }
+        if (laneNodes.isEmpty()) continue;
+
+        // Group nodes by their X position (same X = same BFS level = potential vertical overlap)
+        Map<Double, List<Map.Entry<String, NodeLayout>>> byX = new LinkedHashMap<>();
+        for (Map.Entry<String, NodeLayout> e : laneNodes) {
+            double xKey = Math.round(e.getValue().x() / 10.0) * 10.0; // bucket by 10px
+            byX.computeIfAbsent(xKey, k -> new ArrayList<>()).add(e);
+        }
+
+        for (List<Map.Entry<String, NodeLayout>> group : byX.values()) {
+            if (group.size() == 1) {
+                // Single node at this X — center it in the lane
+                Map.Entry<String, NodeLayout> e = group.get(0);
+                NodeLayout cur = e.getValue();
+                double newY = laneCenterY - (cur.height() / 2.0);
+                newY = Math.max(laneTop + 10, Math.min(newY, laneBottom - cur.height() - 10));
+                layouts.put(e.getKey(), new NodeLayout(cur.x(), newY, cur.width(), cur.height()));
+            } else {
+                // Multiple nodes at same X — stack them vertically centered in the lane
+                double totalHeight = group.stream().mapToDouble(e -> e.getValue().height()).sum();
+                double gap = 20.0;
+                double totalWithGaps = totalHeight + (gap * (group.size() - 1));
+                double startY = laneCenterY - (totalWithGaps / 2.0);
+                startY = Math.max(laneTop + 10, startY);
+
+                double currentY = startY;
+                for (Map.Entry<String, NodeLayout> e : group) {
+                    NodeLayout cur = e.getValue();
+                    double clampedY = Math.min(currentY, laneBottom - cur.height() - 10);
+                    layouts.put(e.getKey(), new NodeLayout(cur.x(), clampedY, cur.width(), cur.height()));
+                    currentY += cur.height() + gap;
+                }
+            }
+        }
+    }
+}
+
+
 
     // =====================================================
     // VALIDATION
@@ -744,7 +947,18 @@ flowFactory.createSequenceFlow(modelInstance, sp, flow, allSubNodes);
             Map<String, NodeLayout> allLayouts = new LinkedHashMap<>(nodeLayouts);
             allLayouts.putAll(computeArtifactLayouts(elementsById, extraEdges, nodeLayouts));
 
-            for (FlowNode node : topLevelNodes.values()) {
+            createSingleProcessLaneShapes(modelInstance, plane, process, allLayouts, usedDiIds);
+
+if (hasLanes(process)) {
+    double minY = allLayouts.values().stream().mapToDouble(NodeLayout::y).min().orElse(START_Y);
+    double maxBottom = allLayouts.values().stream()
+            .mapToDouble(l -> l.y() + l.height()).max().orElse(START_Y + COLLAB_POOL_HEIGHT);
+    double singlePoolY = minY - LANE_PADDING;
+    double singlePoolHeight = maxBottom - singlePoolY + LANE_PADDING;
+    repositionNodesInLanes(process, allLayouts, singlePoolY, singlePoolHeight);
+}
+
+for (FlowNode node : topLevelNodes.values()) {
                 createBpmnShape(modelInstance, plane, node, allLayouts.get(node.getId()), usedDiIds);
             }
             for (BaseElement element : elementsById.values()) {

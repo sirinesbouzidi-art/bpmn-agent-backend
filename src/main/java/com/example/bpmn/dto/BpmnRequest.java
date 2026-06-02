@@ -24,7 +24,8 @@ public class BpmnRequest {
 
     @Valid
     private List<FlowDTO> flows = new ArrayList<>();
-
+    
+    
     public ProcessDTO getProcess() {
         return process;
     }

@@ -106,46 +106,46 @@ public class ElementDTO {
     public String getCalledElement() {
         return calledElement;
     }
- 
+
     public void setCalledElement(String calledElement) {
         this.calledElement = calledElement;
     }
- 
+
     public String getVariables() {
         return variables;
     }
- 
+
     public void setVariables(String variables) {
         this.variables = variables;
     }
- 
+
     public List<Map<String, String>> getIn() {
         return in;
     }
- 
+
     public void setIn(List<Map<String, String>> in) {
         this.in = in;
     }
- 
+
     public List<Map<String, String>> getOut() {
         return out;
     }
- 
+
     public void setOut(List<Map<String, String>> out) {
         this.out = out;
     }
     public String getTriggerType() {
         return triggerType;
     }
- 
+
     public void setTriggerType(String triggerType) {
         this.triggerType = triggerType;
     }
- 
+
     public Boolean getInterrupting() {
         return interrupting;
     }
- 
+
     public void setInterrupting(Boolean interrupting) {
         this.interrupting = interrupting;
     }

@@ -10,8 +10,7 @@ public class BpmnRequest {
     @Valid
     private ProcessDTO process;
 
-    @Valid
-    private CollaborationDTO collaboration;
+
 
     @Valid
     private List<ProcessDTO> processes = new ArrayList<>();
@@ -34,14 +33,7 @@ public class BpmnRequest {
         this.process = process;
     }
 
-    public CollaborationDTO getCollaboration() {
-        return collaboration;
-    }
-
-    public void setCollaboration(CollaborationDTO collaboration) {
-        this.collaboration = collaboration;
-    }
-
+    
     public List<ProcessDTO> getProcesses() {
         return processes;
     }

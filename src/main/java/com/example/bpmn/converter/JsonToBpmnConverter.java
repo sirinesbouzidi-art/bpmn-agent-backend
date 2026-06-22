@@ -104,7 +104,7 @@ public class JsonToBpmnConverter {
     private static final double LOOP_EDGE_MAX_COMPACT_DEPTH    = 120;
     private static final double MESSAGE_FLOW_VERTICAL_ALIGN_X   = 100;
     private static final double SUBPROCESS_TITLE_CLEARANCE     = 30;
-    private static final double CONTAINER_RIGHT_NEIGHBOR_GAP   = 60;
+    private static final double CONTAINER_RIGHT_NEIGHBOR_GAP   = 250;
     private static final Pattern NON_ID_CHARACTER              = Pattern.compile("[^A-Za-z0-9_.-]");
 
     // =====================================================
@@ -364,6 +364,7 @@ public class JsonToBpmnConverter {
             nodesByLevel.forEach((lvl, nodes) -> nodes.forEach(n -> levelByNodeId.put(n.getId(), lvl)));
 
             resolveContainerOverlaps(nodeLayouts, nodesByLevel, levelByNodeId);
+            recenterJoinNodes(nodeLayouts, graph, nodesByLevel, levelByNodeId);
             globalNodeLayouts.putAll(nodeLayouts);
 
             // ── PASS 3+4: BPMN DI generation with corrected edge routing ─────
@@ -592,22 +593,35 @@ public class JsonToBpmnConverter {
             }
         }
         // Re-space levels after container expansion
-for (int levelIdx = 0; levelIdx < sortedLevels.size() - 1; levelIdx++) {
+    for (int levelIdx = 0; levelIdx < sortedLevels.size() - 1; levelIdx++) {
 
     int currentLevel = sortedLevels.get(levelIdx);
     int nextLevel = sortedLevels.get(levelIdx + 1);
 
     double maxRight = 0;
+    boolean hasLargeContainer = false;
 
     for (FlowNode node : nodesByLevel.get(currentLevel)) {
+
         NodeLayout layout = nodeLayouts.get(node.getId());
 
         if (layout != null) {
+
             maxRight = Math.max(maxRight, layout.right());
+
+            if ((node instanceof SubProcess || node instanceof Transaction)
+                    && layout.width() > 500) {
+
+                hasLargeContainer = true;
+            }
         }
     }
 
     double requiredX = maxRight + HORIZONTAL_GAP;
+
+    if (hasLargeContainer) {
+        requiredX += 250;
+    }
 
     for (FlowNode node : nodesByLevel.get(nextLevel)) {
 
@@ -628,6 +642,69 @@ for (int levelIdx = 0; levelIdx < sortedLevels.size() - 1; levelIdx++) {
     }
 }
     }
+
+   private void recenterJoinNodes(
+        Map<String, NodeLayout> nodeLayouts,
+        GraphIndex graph,
+        Map<Integer, List<FlowNode>> nodesByLevel,
+        Map<String, Integer> levelByNodeId) {
+
+    for (Map.Entry<Integer, List<FlowNode>> levelEntry : nodesByLevel.entrySet()) {
+        int level = levelEntry.getKey();
+        List<FlowNode> levelNodes = levelEntry.getValue();
+
+        for (FlowNode node : levelNodes) {
+            List<String> incomingIds = graph.incoming().getOrDefault(node.getId(), List.of());
+            if (incomingIds.size() < 2) continue;
+
+            List<NodeLayout> predecessorLayouts = incomingIds.stream()
+                    .map(nodeLayouts::get)
+                    .filter(java.util.Objects::nonNull)
+                    .toList();
+            if (predecessorLayouts.size() < 2) continue;
+
+            double avgCenterY = predecessorLayouts.stream()
+                    .mapToDouble(NodeLayout::centerY)
+                    .average()
+                    .orElse(0);
+
+            NodeLayout cur = nodeLayouts.get(node.getId());
+            if (cur == null) continue;
+
+            double newY = Math.max(START_Y, avgCenterY - cur.height() / 2);
+            NodeLayout candidate = cur.withY(newY);
+
+            // FIX: never place a recentered node where it overlaps a sibling
+            // at the same level (e.g. an expanded subprocess). If it does,
+            // push the candidate below that sibling instead.
+            boolean collides = true;
+            int guard = 0;
+            while (collides && guard < 20) {
+                collides = false;
+                for (FlowNode sibling : levelNodes) {
+                    if (sibling.getId().equals(node.getId())) continue;
+                    NodeLayout siblingLayout = nodeLayouts.get(sibling.getId());
+                    if (siblingLayout == null) continue;
+
+                    boolean overlapsX = candidate.x() < siblingLayout.right()
+                            && candidate.right() > siblingLayout.x();
+                    boolean overlapsY = candidate.y() < siblingLayout.y() + siblingLayout.height()
+                            && candidate.y() + candidate.height() > siblingLayout.y();
+
+                    if (overlapsX && overlapsY) {
+                        double pushedY = siblingLayout.y() + siblingLayout.height() + 40;
+                        candidate = candidate.withY(pushedY);
+                        collides = true;
+                    }
+                }
+                guard++;
+            }
+
+            nodeLayouts.put(node.getId(), candidate);
+        }
+    }
+}
+
 
     // =====================================================
     // SUBPROCESS / TRANSACTION DIAGRAM GENERATION
@@ -1255,37 +1332,71 @@ for (int levelIdx = 0; levelIdx < sortedLevels.size() - 1; levelIdx++) {
      * reroutes to avoid passing through them.
      */
     private void routeForwardEdge(
-            BpmnModelInstance modelInstance,
-            BpmnEdge edge,
-            NodeLayout src,
-            NodeLayout tgt,
-            Map<String, NodeLayout> allLayouts) {
+        BpmnModelInstance modelInstance,
+        BpmnEdge edge,
+        NodeLayout src,
+        NodeLayout tgt,
+        Map<String, NodeLayout> allLayouts) {
 
-        double sx = src.right();
-        double sy = src.centerY();
-        double tx = tgt.x();
-        double ty = tgt.centerY();
+    double sx = src.right();
+    double sy = src.centerY();
+    double tx = tgt.x();
+    double ty = tgt.centerY();
 
-        double horizontalDist = tx - sx;
-        double verticalDist   = Math.abs(ty - sy);
+    double horizontalDist = tx - sx;
+    double verticalDist   = Math.abs(ty - sy);
 
-        double midX = findClearMidpointX(sx, tx, sy, ty, allLayouts);
+    double midX = findClearMidpointX(sx, tx, sy, ty, allLayouts);
 
-        addWaypoint(modelInstance, edge, sx, sy);
+    addWaypoint(modelInstance, edge, sx, sy);
 
-        if (verticalDist <= EDGE_VERTICAL_SPLIT_THRESHOLD) {
-            addWaypoint(modelInstance, edge, midX, sy);
-            addWaypoint(modelInstance, edge, midX, ty);
-        } else {
-            double splitX = sx + Math.max(40, horizontalDist * 0.33);
-            // Use the larger of the computed split and the clear midpoint
-            double safeX  = Math.max(splitX, midX);
-            addWaypoint(modelInstance, edge, safeX, sy);
-            addWaypoint(modelInstance, edge, safeX, ty);
-        }
+    if (verticalDist <= EDGE_VERTICAL_SPLIT_THRESHOLD) {
+        addWaypoint(modelInstance, edge, midX, sy);
+        addWaypoint(modelInstance, edge, midX, ty);
+        addWaypoint(modelInstance, edge, tx, ty);
+        return;
+    }
 
+    double splitX = sx + Math.max(40, horizontalDist * 0.33);
+    double safeX  = Math.max(splitX, midX);
+
+    // FIX: the LAST horizontal run (y=ty, from safeX to tx) was never checked.
+    // That is the segment that actually cuts through tall containers like
+    // an expanded subprocess sitting between safeX and tx.
+    double safeTy = findClearHorizontalY(safeX, tx, ty, allLayouts);
+
+    addWaypoint(modelInstance, edge, safeX, sy);
+    addWaypoint(modelInstance, edge, safeX, safeTy);
+    addWaypoint(modelInstance, edge, tx, safeTy);
+
+    if (safeTy != ty) {
+        // Detour was needed: come back down/up to the real target height
+        // with one extra elbow right before reaching tx.
         addWaypoint(modelInstance, edge, tx, ty);
     }
+}
+/**
+ * Checks whether a horizontal segment at height y, spanning [x1, x2], cuts
+ * through any node's bounding box. If so, returns a y just above that node's
+ * top edge; otherwise returns y unchanged.
+ */
+private double findClearHorizontalY(
+        double x1, double x2, double y,
+        Map<String, NodeLayout> allLayouts) {
+
+    double left  = Math.min(x1, x2);
+    double right = Math.max(x1, x2);
+    double safeY = y;
+
+    for (NodeLayout layout : allLayouts.values()) {
+        boolean xOverlap = layout.right() > left && layout.x() < right;
+        boolean yOverlap = y > layout.y() && y < layout.y() + layout.height();
+        if (xOverlap && yOverlap) {
+            safeY = Math.min(safeY, layout.y() - 20);
+        }
+    }
+    return safeY;
+}
 
     /**
      * Routes a backward (loop) edge below all nodes in the bounding region.
@@ -1344,36 +1455,37 @@ for (int levelIdx = 0; levelIdx < sortedLevels.size() - 1; levelIdx++) {
      * Routes a same-level or crossing edge below both nodes.
      */
     private void routeAroundEdge(
-            BpmnModelInstance modelInstance,
-            BpmnEdge edge,
-            NodeLayout src,
-            NodeLayout tgt,
-            Map<String, NodeLayout> allLayouts) {
+        BpmnModelInstance modelInstance,
+        BpmnEdge edge,
+        NodeLayout src,
+        NodeLayout tgt,
+        Map<String, NodeLayout> allLayouts) {
 
-        double belowY  = Math.max(src.y() + src.height(), tgt.y() + tgt.height())
-                + ORTHOGONAL_EDGE_OFFSET + 24;
+    double belowY  = Math.max(src.y() + src.height(), tgt.y() + tgt.height())
+            + ORTHOGONAL_EDGE_OFFSET + 24;
 
-        // Push below any container that overlaps the region between source and target
-        for (NodeLayout layout : allLayouts.values()) {
-            boolean isContainer = layout.width() > TASK_WIDTH * 1.5;
-            if (!isContainer) continue;
-            double regionLeft  = Math.min(src.right(), tgt.right());
-            double regionRight = Math.max(src.x(), tgt.x());
-            if (layout.x() < regionRight && layout.right() > regionLeft) {
-                belowY = Math.max(belowY, layout.y() + layout.height() + ORTHOGONAL_EDGE_OFFSET);
-            }
+    double regionLeft  = Math.min(src.right(), tgt.right());
+    double regionRight = Math.max(src.x(), tgt.x());
+
+    // FIX: no longer restricted to "isContainer" — any node whose band
+    // intersects the path must push the detour further down.
+    for (NodeLayout layout : allLayouts.values()) {
+        if (layout == src || layout == tgt) continue;
+        if (layout.x() < regionRight && layout.right() > regionLeft) {
+            belowY = Math.max(belowY, layout.y() + layout.height() + ORTHOGONAL_EDGE_OFFSET);
         }
-
-        double sx = src.right();
-        double sy = src.centerY();
-        double tx = tgt.x();
-        double ty = tgt.centerY();
-
-        addWaypoint(modelInstance, edge, sx, sy);
-        addWaypoint(modelInstance, edge, sx, belowY);
-        addWaypoint(modelInstance, edge, tx, belowY);
-        addWaypoint(modelInstance, edge, tx, ty);
     }
+
+    double sx = src.right();
+    double sy = src.centerY();
+    double tx = tgt.x();
+    double ty = tgt.centerY();
+
+    addWaypoint(modelInstance, edge, sx, sy);
+    addWaypoint(modelInstance, edge, sx, belowY);
+    addWaypoint(modelInstance, edge, tx, belowY);
+    addWaypoint(modelInstance, edge, tx, ty);
+}
 
     /**
      * Finds a horizontal midpoint X between sx and tx that does not pass through
@@ -1381,26 +1493,25 @@ for (int levelIdx = 0; levelIdx < sortedLevels.size() - 1; levelIdx++) {
      * shifts right past its right edge.
      */
     private double findClearMidpointX(
-            double sx, double tx, double sy, double ty,
-            Map<String, NodeLayout> allLayouts) {
+        double sx, double tx, double sy, double ty,
+        Map<String, NodeLayout> allLayouts) {
 
-        double naive = sx + (tx - sx) * 0.5;
+    double naive = sx + (tx - sx) * 0.5;
+    double best = naive;
 
-        for (NodeLayout layout : allLayouts.values()) {
-            boolean isContainer = layout.width() > TASK_WIDTH * 1.5;
-            if (!isContainer) continue;
+    for (NodeLayout layout : allLayouts.values()) {
+        // FIX: check every node, not just containers — a plain task between
+        // source and target on the same horizontal band must be avoided too.
+        boolean xOverlap = naive >= layout.x() - 5 && naive <= layout.right() + 5;
+        boolean yOverlap = Math.min(sy, ty) < layout.y() + layout.height()
+                && Math.max(sy, ty) > layout.y();
 
-            boolean xOverlap = naive >= layout.x() && naive <= layout.right();
-            boolean yOverlap = Math.min(sy, ty) < layout.y() + layout.height()
-                    && Math.max(sy, ty) > layout.y();
-
-            if (xOverlap && yOverlap) {
-                // Route past the container's right edge
-                return layout.right() + 20;
-            }
+        if (xOverlap && yOverlap) {
+            best = Math.max(best, layout.right() + 20);
         }
-        return naive;
     }
+    return best;
+}
 
     private void addWaypoint(BpmnModelInstance modelInstance, BpmnEdge edge, double x, double y) {
         Waypoint waypoint = modelInstance.newInstance(Waypoint.class);

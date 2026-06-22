@@ -13,6 +13,11 @@ import com.example.bpmn.factory.transaction.TransactionFactory;
 import com.example.bpmn.factory.subprocess.AdHocSubProcessFactory;
 import com.example.bpmn.factory.subprocess.CallActivityFactory;
 import com.example.bpmn.factory.subprocess.EventSubProcessFactory;
+import org.camunda.bpm.model.bpmn.instance.DataObjectReference;
+import org.camunda.bpm.model.bpmn.instance.DataStoreReference;
+import org.camunda.bpm.model.bpmn.instance.TextAnnotation;
+import org.camunda.bpm.model.bpmn.instance.Text;
+import org.camunda.bpm.model.bpmn.instance.BaseElement;
 
 import java.util.Collections;
 import java.util.HashMap;
@@ -35,63 +40,86 @@ public class SubProcessFactory {
     // =====================================================
 
     public FlowNode createSubProcess(
-            BpmnModelInstance modelInstance,
-            org.camunda.bpm.model.bpmn.instance.Process process,
-            ElementDTO element
-    ) {
-        SubProcess subProcess = modelInstance.newInstance(SubProcess.class);
-        subProcess.setId(element.getId());
-        subProcess.setName(element.getName());
+        BpmnModelInstance modelInstance,
+        org.camunda.bpm.model.bpmn.instance.Process process,
+        ElementDTO element
+) {
+    SubProcess subProcess = modelInstance.newInstance(SubProcess.class);
+    subProcess.setId(element.getId());
+    subProcess.setName(element.getName());
+    process.addChildElement(subProcess);
 
-        process.addChildElement(subProcess);
+    Map<String, FlowNode> nodesById = new HashMap<>();
 
-        Map<String, FlowNode> nodesById = new HashMap<>();
-
-        for (ElementDTO child : safeElements(element)) {
-            // FIX 1: was createNestedChildNode(modelInstance, nested, child)
-            //        "nested" variable does not exist in this scope.
-            //        Correct call: createChildNode(modelInstance, subProcess, child)
+    for (ElementDTO child : safeElements(element)) {
+        if (isArtifact(child.getType())) {
+            createArtifact(modelInstance, subProcess, child);
+        } else {
             FlowNode node = createChildNode(modelInstance, subProcess, child);
             nodesById.put(child.getId(), node);
         }
-
-        // FIX 2: was element.getFlows() — throws NPE when flows is null.
-        //        Use safeFlows(element) consistent with the nested overload below.
-        for (FlowDTO flow : safeFlows(element)) {
-            flowFactory.createSequenceFlow(modelInstance, subProcess, flow, nodesById);
-        }
-
-        return subProcess;
     }
+
+    // Construire elementsById incluant les artifacts
+Map<String, BaseElement> elementsById = new HashMap<>(nodesById);
+subProcess.getFlowElements().forEach(fe -> elementsById.put(fe.getId(), fe));
+
+for (FlowDTO flow : safeFlows(element)) {
+    String flowType = flow.getType() == null ? "sequenceFlow" : flow.getType();
+    switch (flowType) {
+        case "sequenceFlow" -> flowFactory.createSequenceFlow(modelInstance, subProcess, flow, nodesById);
+        case "association"  -> flowFactory.createAssociation(modelInstance, subProcess, flow, elementsById, org.camunda.bpm.model.bpmn.AssociationDirection.None);
+        case "associationOne"  -> flowFactory.createAssociation(modelInstance, subProcess, flow, elementsById, org.camunda.bpm.model.bpmn.AssociationDirection.One);
+        case "associationBoth" -> flowFactory.createAssociation(modelInstance, subProcess, flow, elementsById, org.camunda.bpm.model.bpmn.AssociationDirection.Both);
+        default -> throw new IllegalArgumentException("Unsupported flow type in subprocess: " + flowType);
+    }
+}
+
+    return subProcess;
+}
 
     // =====================================================
     // SUBPROCESS FOR PARENT SUBPROCESS (nested)
     // =====================================================
 
     public FlowNode createSubProcess(
-            BpmnModelInstance modelInstance,
-            SubProcess parentSubProcess,
-            ElementDTO element
-    ) {
-        SubProcess subProcess = modelInstance.newInstance(SubProcess.class);
-        subProcess.setId(element.getId());
-        subProcess.setName(element.getName());
+        BpmnModelInstance modelInstance,
+        SubProcess parentSubProcess,
+        ElementDTO element
+) {
+    SubProcess subProcess = modelInstance.newInstance(SubProcess.class);
+    subProcess.setId(element.getId());
+    subProcess.setName(element.getName());
+    parentSubProcess.addChildElement(subProcess);
 
-        parentSubProcess.addChildElement(subProcess);
+    Map<String, FlowNode> nodesById = new HashMap<>();
 
-        Map<String, FlowNode> nodesById = new HashMap<>();
-
-        for (ElementDTO child : safeElements(element)) {
+    for (ElementDTO child : safeElements(element)) {
+        if (isArtifact(child.getType())) {
+            createArtifact(modelInstance, subProcess, child);
+        } else {
             FlowNode node = createChildNode(modelInstance, subProcess, child);
             nodesById.put(child.getId(), node);
         }
-
-        for (FlowDTO flow : safeFlows(element)) {
-            flowFactory.createSequenceFlow(modelInstance, subProcess, flow, nodesById);
-        }
-
-        return subProcess;
     }
+
+    // Construire elementsById incluant les artifacts
+Map<String, BaseElement> elementsById = new HashMap<>(nodesById);
+subProcess.getFlowElements().forEach(fe -> elementsById.put(fe.getId(), fe));
+
+for (FlowDTO flow : safeFlows(element)) {
+    String flowType = flow.getType() == null ? "sequenceFlow" : flow.getType();
+    switch (flowType) {
+        case "sequenceFlow" -> flowFactory.createSequenceFlow(modelInstance, subProcess, flow, nodesById);
+        case "association"  -> flowFactory.createAssociation(modelInstance, subProcess, flow, elementsById, org.camunda.bpm.model.bpmn.AssociationDirection.None);
+        case "associationOne"  -> flowFactory.createAssociation(modelInstance, subProcess, flow, elementsById, org.camunda.bpm.model.bpmn.AssociationDirection.One);
+        case "associationBoth" -> flowFactory.createAssociation(modelInstance, subProcess, flow, elementsById, org.camunda.bpm.model.bpmn.AssociationDirection.Both);
+        default -> throw new IllegalArgumentException("Unsupported flow type in subprocess: " + flowType);
+    }
+}
+
+    return subProcess;
+}
 
     // =====================================================
     // CHILD NODE ROUTING
@@ -179,5 +207,38 @@ public class SubProcessFactory {
         SubProcess parentSubProcess,
         ElementDTO element) {
     return createChildNode(modelInstance, parentSubProcess, element);
+}
+private boolean isArtifact(String type) {
+    return "dataObjectReference".equals(type)
+        || "dataStoreReference".equals(type)
+        || "textAnnotation".equals(type);
+}
+
+private void createArtifact(
+        BpmnModelInstance modelInstance,
+        SubProcess subProcess,
+        ElementDTO element) {
+    switch (element.getType()) {
+        case "dataObjectReference" -> {
+            DataObjectReference ref = modelInstance.newInstance(DataObjectReference.class);
+            ref.setId(element.getId());
+            ref.setAttributeValue("name", element.getName(), true);
+            subProcess.addChildElement(ref);
+        }
+        case "dataStoreReference" -> {
+            DataStoreReference ref = modelInstance.newInstance(DataStoreReference.class);
+            ref.setId(element.getId());
+            ref.setAttributeValue("name", element.getName(), true);
+            subProcess.addChildElement(ref);
+        }
+        case "textAnnotation" -> {
+            TextAnnotation annotation = modelInstance.newInstance(TextAnnotation.class);
+            annotation.setId(element.getId());
+            Text text = modelInstance.newInstance(Text.class);
+            text.setTextContent(element.getName() == null ? "" : element.getName());
+            annotation.setText(text);
+            subProcess.addChildElement(annotation);
+        }
+    }
 }
 }

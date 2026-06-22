@@ -20,10 +20,15 @@ public class CamundaService {
     private static final Logger LOGGER = LoggerFactory.getLogger(CamundaService.class);
 
     private final ZeebeClient client;
+    private final ZeebeCompatibilityService zeebeCompatibilityService;
 
-    public CamundaService(@Value("${camunda.gateway-address:localhost:26500}") String gatewayAddress) {
+    public CamundaService(
+            @Value("${camunda.gateway-address:localhost:26500}") String gatewayAddress,
+            ZeebeCompatibilityService zeebeCompatibilityService
+    ) {
         // Local self-managed Camunda uses direct Zeebe gRPC (no OAuth).
         // Camunda SaaS/cloud requires OAuth and different connectivity.
+        this.zeebeCompatibilityService = zeebeCompatibilityService;
         this.client = ZeebeClient.newClientBuilder()
                 .gatewayAddress(gatewayAddress)
                 .usePlaintext()
@@ -32,10 +37,22 @@ public class CamundaService {
 
     public CamundaDeployResponse deployBpmn(String xml, String processName) {
         try {
-            DeploymentEvent deploymentEvent = client.newDeployResourceCommand()
-                    .addResourceBytes(xml.getBytes(StandardCharsets.UTF_8), sanitizeProcessName(processName) + ".bpmn")
-                    .send()
-                    .join();
+            String zeebeCompatibleXml =
+                zeebeCompatibilityService.enrich(xml);
+
+        System.out.println(
+                "========== ZEEBE XML ==========");
+        System.out.println(zeebeCompatibleXml);
+        System.out.println(
+                "================================");
+
+        DeploymentEvent deploymentEvent =
+                client.newDeployResourceCommand()
+                        .addResourceBytes(
+                                zeebeCompatibleXml.getBytes(StandardCharsets.UTF_8),
+                                sanitizeProcessName(processName) + ".bpmn")
+                        .send()
+                        .join();
 
             long deploymentKey = deploymentEvent.getKey();
 
@@ -49,9 +66,18 @@ public class CamundaService {
             throw new CamundaIntegrationException(HttpStatus.INTERNAL_SERVER_ERROR,
                     "Failed to deploy BPMN to local Camunda", ex);
         } catch (Exception ex) {
-            LOGGER.error("Unexpected Camunda local deployment error", ex);
-            throw new CamundaIntegrationException(HttpStatus.INTERNAL_SERVER_ERROR,
-                    "Unexpected error while deploying BPMN to local Camunda", ex);
+            ex.printStackTrace();
+
+    Throwable root = ex;
+    while (root.getCause() != null) {
+        root = root.getCause();
+    }
+
+    System.out.println(
+            "ROOT CAUSE = "
+                    + root.getMessage());
+
+    throw ex;
         }
     }
 

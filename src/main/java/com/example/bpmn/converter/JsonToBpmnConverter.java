@@ -89,15 +89,12 @@ public class JsonToBpmnConverter {
     private static final double DATA_STORE_HEIGHT              = 50;
     private static final double SUBPROCESS_COLLAPSED_WIDTH     = 180;
     private static final double SUBPROCESS_COLLAPSED_HEIGHT    = 110;
-    private static final double ADHOC_DEFAULT_WIDTH            = 500;
-    private static final double ADHOC_DEFAULT_HEIGHT           = 320;
     private static final double ORTHOGONAL_EDGE_OFFSET         = 48;
     private static final double SUBPROCESS_TOP_PADDING         = 40;
     private static final double SUBPROCESS_BOTTOM_PADDING      = 40;
     private static final double SUBPROCESS_LEFT_PADDING        = 52;
     private static final double SUBPROCESS_RIGHT_PADDING       = 90;
     private static final double NESTED_SUBPROCESS_MIN_GAP      = 42;
-    private static final double EDGE_VERTICAL_SPLIT_THRESHOLD  = 110;
     private static final double LOOP_EDGE_MIN_DETOUR_X         = 150;
     private static final double MESSAGE_FLOW_MIN_CLEARANCE     = 30;
     private static final double LOOP_EDGE_COMPACT_THRESHOLD    = 350;
@@ -105,6 +102,8 @@ public class JsonToBpmnConverter {
     private static final double MESSAGE_FLOW_VERTICAL_ALIGN_X   = 100;
     private static final double SUBPROCESS_TITLE_CLEARANCE     = 30;
     private static final double CONTAINER_RIGHT_NEIGHBOR_GAP   = 140;
+    private static final double MERGE_INCOMING_CORRIDOR_SPACING = 50;
+    private static final double GATEWAY_OUTGOING_CORRIDOR_GAP = 40;
     private static final Pattern NON_ID_CHARACTER              = Pattern.compile("[^A-Za-z0-9_.-]");
 
     // =====================================================
@@ -397,8 +396,8 @@ public class JsonToBpmnConverter {
             }
             renderExpandedAdHocContents(modelInstance, plane, nodesById.values(), nodeLayouts, usedDiIds);
 
-            createCollapsedSubProcessDiagrams(modelInstance, definitions, nodesById.values(),
-                    usedDiIds, nodeLayouts);
+            // Créer les diagrammes pour les subprocess (même vides)
+            createCollapsedSubProcessDiagrams(modelInstance, definitions, nodesById.values(), usedDiIds, nodeLayouts);
 
         } catch (BpmnModelException ex) {
             throw new IllegalArgumentException("Unable to generate BPMN diagram layout", ex);
@@ -415,45 +414,36 @@ public class JsonToBpmnConverter {
      * No positions are assigned here — only width and height.
      */
     private void computeContainerSizesBottomUp(Map<String, FlowNode> nodesById) {
-        for (FlowNode node : nodesById.values()) {
-            if (!(node instanceof SubProcess subProcess)) continue;
+    for (FlowNode node : nodesById.values()) {
+        if (!(node instanceof SubProcess subProcess)) continue;
 
-            Map<String, FlowNode> children = collectChildNodes(subProcess);
-            List<SequenceFlow> childFlows  = collectChildFlows(subProcess);
+        Map<String, FlowNode> children = collectChildNodes(subProcess);
+        List<SequenceFlow> childFlows  = collectChildFlows(subProcess);
 
-            if (children.isEmpty()) {
-                // Empty or collapsed subprocess — use fixed collapsed dimensions
-                globalNodeLayouts.put(subProcess.getId(),
-                        new NodeLayout(0, 0, SUBPROCESS_COLLAPSED_WIDTH, SUBPROCESS_COLLAPSED_HEIGHT));
-                continue;
-            }
-
-            // CRITICAL: recurse first so child containers are sized before the parent is measured
+        // CRITICAL: recurse first so nested containers are still measured
+        // (needed when rendering their OWN internal diagram on double-click),
+        // even though the parent itself will use a fixed collapsed size below.
+        if (!children.isEmpty()) {
             computeContainerSizesBottomUp(children);
-
-            if (node instanceof Transaction transaction) {
-
-    globalNodeLayouts.put(
-        transaction.getId(),
-        measureTransactionContainer(children, childFlows)
-    );
-
-} else if (adHocSubProcessIds.contains(subProcess.getId())) {
-
-    globalNodeLayouts.put(
-        subProcess.getId(),
-        measureAdHocContainer(children)
-    );
-
-} else {
-
-    globalNodeLayouts.put(
-        subProcess.getId(),
-        measureExpandedSubProcessContainer(children, childFlows)
-    );
-}
+        }
+        if (node instanceof Transaction) {
+            globalNodeLayouts.put(node.getId(),
+                    new NodeLayout(0, 0, SUBPROCESS_COLLAPSED_WIDTH, SUBPROCESS_COLLAPSED_HEIGHT));
+        } else if (adHocSubProcessIds.contains(subProcess.getId())) {
+            // AdHoc subprocesses are rendered expanded inline (renderExpandedAdHocContents),
+            // so they still need their real measured size to fit their content.
+            globalNodeLayouts.put(
+                subProcess.getId(),
+                children.isEmpty()
+                    ? new NodeLayout(0, 0, SUBPROCESS_COLLAPSED_WIDTH, SUBPROCESS_COLLAPSED_HEIGHT)
+                    : measureAdHocContainer(children)
+            );
+        } else {
+            globalNodeLayouts.put(node.getId(),
+                    new NodeLayout(0, 0, SUBPROCESS_COLLAPSED_WIDTH, SUBPROCESS_COLLAPSED_HEIGHT));
         }
     }
+}
 private NodeLayout measureTransactionContainer(
         Map<String, FlowNode> children,
         List<SequenceFlow> childFlows) {
@@ -704,57 +694,95 @@ private NodeLayout measureTransactionContainer(
         Map<Integer, List<FlowNode>> nodesByLevel,
         Map<String, Integer> levelByNodeId) {
 
+    
+
     for (Map.Entry<Integer, List<FlowNode>> levelEntry : nodesByLevel.entrySet()) {
+
         int level = levelEntry.getKey();
         List<FlowNode> levelNodes = levelEntry.getValue();
 
         for (FlowNode node : levelNodes) {
-            List<String> incomingIds = graph.incoming().getOrDefault(node.getId(), List.of());
-            if (incomingIds.size() < 2) continue;
 
-            List<NodeLayout> predecessorLayouts = incomingIds.stream()
-                    .map(nodeLayouts::get)
-                    .filter(java.util.Objects::nonNull)
-                    .toList();
-            if (predecessorLayouts.size() < 2) continue;
+            List<String> incomingIds =
+                    graph.incoming().getOrDefault(node.getId(), List.of());
 
-            double avgCenterY = predecessorLayouts.stream()
-                    .mapToDouble(NodeLayout::centerY)
-                    .average()
-                    .orElse(0);
+            if (incomingIds.size() < 2) {
+                continue;
+            }
+
+            List<NodeLayout> predecessorLayouts =
+                    incomingIds.stream()
+                            .map(nodeLayouts::get)
+                            .filter(java.util.Objects::nonNull)
+                            .toList();
+
+            if (predecessorLayouts.size() < 2) {
+                continue;
+            }
+
+            double avgCenterY =
+                    predecessorLayouts.stream()
+                            .mapToDouble(NodeLayout::centerY)
+                            .average()
+                            .orElse(0);
 
             NodeLayout cur = nodeLayouts.get(node.getId());
-            if (cur == null) continue;
 
-            double newY = Math.max(START_Y, avgCenterY - cur.height() / 2);
+            if (cur == null) {
+                continue;
+            }
+
+            double newY =
+                    Math.max(
+                            START_Y,
+                            avgCenterY - cur.height() / 2
+                    );
+
             NodeLayout candidate = cur.withY(newY);
 
-            // FIX: never place a recentered node where it overlaps a sibling
-            // at the same level (e.g. an expanded subprocess). If it does,
-            // push the candidate below that sibling instead.
+            
+
             boolean collides = true;
             int guard = 0;
-            while (collides && guard < 20) {
-                collides = false;
-                for (FlowNode sibling : levelNodes) {
-                    if (sibling.getId().equals(node.getId())) continue;
-                    NodeLayout siblingLayout = nodeLayouts.get(sibling.getId());
-                    if (siblingLayout == null) continue;
 
-                    boolean overlapsX = candidate.x() < siblingLayout.right()
-                            && candidate.right() > siblingLayout.x();
-                    boolean overlapsY = candidate.y() < siblingLayout.y() + siblingLayout.height()
-                            && candidate.y() + candidate.height() > siblingLayout.y();
+            while (collides && guard < 20) {
+
+                collides = false;
+
+                for (FlowNode sibling : levelNodes) {
+
+                    if (sibling.getId().equals(node.getId())) {
+                        continue;
+                    }
+
+                    NodeLayout siblingLayout =
+                            nodeLayouts.get(sibling.getId());
+
+                    if (siblingLayout == null) {
+                        continue;
+                    }
+
+                    boolean overlapsX =
+                            candidate.x() < siblingLayout.right()
+                                    && candidate.right() > siblingLayout.x();
+
+                    boolean overlapsY =
+                            candidate.y() < siblingLayout.y() + siblingLayout.height()
+                                    && candidate.y() + candidate.height() > siblingLayout.y();
 
                     if (overlapsX && overlapsY) {
-                        double pushedY = siblingLayout.y() + siblingLayout.height() + 40;
+                        double pushedY =
+                                siblingLayout.y()
+                                        + siblingLayout.height()
+                                        + 40;
+
                         candidate = candidate.withY(pushedY);
                         collides = true;
                     }
                 }
+
                 guard++;
             }
-
             nodeLayouts.put(node.getId(), candidate);
         }
     }
@@ -766,70 +794,88 @@ private NodeLayout measureTransactionContainer(
     // =====================================================
 
     private void createCollapsedSubProcessDiagrams(
-            BpmnModelInstance modelInstance,
-            Definitions definitions,
-            Collection<FlowNode> nodes,
-            Set<String> usedDiIds,
-            Map<String, NodeLayout> parentLayouts) {
+        BpmnModelInstance modelInstance,
+        Definitions definitions,
+        Collection<FlowNode> nodes,
+        Set<String> usedDiIds,
+        Map<String, NodeLayout> parentLayouts) {
 
-        for (FlowNode node : nodes) {
-            if (node instanceof SubProcess subProcess) {
-                if (adHocSubProcessIds.contains(subProcess.getId())) {
-                    continue;
-                }
-                createSubProcessDiagram(modelInstance, definitions, subProcess, usedDiIds, parentLayouts);
-            } else if (node instanceof Transaction transaction) {
-                createTransactionDiagram(modelInstance, definitions, transaction, usedDiIds);
-            }
+    for (FlowNode node : nodes) {
+        if (node instanceof SubProcess subProcess) {
+            // CRÉER LE DIAGRAMME POUR TOUS LES SUBPROCESS, MÊME VIDES
+            createSubProcessDiagram(modelInstance, definitions, subProcess, usedDiIds, parentLayouts);
+        } else if (node instanceof Transaction transaction) {
+            createTransactionDiagram(modelInstance, definitions, transaction, usedDiIds);
         }
     }
+}
 
     private void createSubProcessDiagram(
-            BpmnModelInstance modelInstance,
-            Definitions definitions,
-            SubProcess subProcess,
-            Set<String> usedDiIds,
-            Map<String, NodeLayout> parentLayouts) {
+    BpmnModelInstance modelInstance,
+    Definitions definitions,
+    SubProcess subProcess,
+    Set<String> usedDiIds,
+    Map<String, NodeLayout> parentLayouts) {
 
-        Map<String, FlowNode> subNodes = new LinkedHashMap<>();
-        List<SequenceFlow> subFlows    = new ArrayList<>();
+    BpmnDiagram diagram = modelInstance.newInstance(BpmnDiagram.class);
+    diagram.setId(stableDiId("BPMNDiagram", subProcess.getId(), modelInstance, usedDiIds));
+    BpmnPlane plane = modelInstance.newInstance(BpmnPlane.class);
+    plane.setId(stableDiId("BPMNPlane", subProcess.getId(), modelInstance, usedDiIds));
+    plane.setBpmnElement(subProcess);
+    diagram.setBpmnPlane(plane);
+    definitions.addChildElement(diagram);
 
-        for (FlowElement element : subProcess.getFlowElements()) {
-            if (element instanceof FlowNode node)   subNodes.put(node.getId(), node);
-            if (element instanceof SequenceFlow flow) subFlows.add(flow);
-        }
-        if (subNodes.isEmpty()) return;
+    Map<String, FlowNode> subNodes = new LinkedHashMap<>();
+    List<SequenceFlow> subFlows = new ArrayList<>();
 
-        BpmnDiagram diagram = modelInstance.newInstance(BpmnDiagram.class);
-        diagram.setId(stableDiId("BPMNDiagram", subProcess.getId(), modelInstance, usedDiIds));
-        BpmnPlane plane = modelInstance.newInstance(BpmnPlane.class);
-        plane.setId(stableDiId("BPMNPlane", subProcess.getId(), modelInstance, usedDiIds));
-        plane.setBpmnElement(subProcess);
-        diagram.setBpmnPlane(plane);
-        definitions.addChildElement(diagram);
-
-        NodeLayout parentLayout = parentLayouts.get(subProcess.getId());
-        Map<String, NodeLayout> subLayouts;
-
-        if (adHocSubProcessIds.contains(subProcess.getId())) {
-            // parentLayout carries the final (x,y,w,h) from PASS 1+2
-            subLayouts = calculateAdHocLayouts(subNodes, subProcess, parentLayout);
-        } else {
-            subLayouts = calculateSubProcessLayouts(subNodes, subFlows, parentLayout);
-        }
-
-        for (FlowNode node : subNodes.values()) {
-            createBpmnShape(modelInstance, plane, node, subLayouts.get(node.getId()), usedDiIds);
-        }
-        for (SequenceFlow flow : subFlows) {
-            createBpmnEdgeRouted(modelInstance, plane, flow, subLayouts, usedDiIds);
-        }
-
-        // Recurse for nested SubProcess / Transaction / AdHoc at any depth
-        createCollapsedSubProcessDiagrams(modelInstance, definitions, subNodes.values(),
-                usedDiIds, subLayouts);
+    for (FlowElement element : subProcess.getFlowElements()) {
+        if (element instanceof FlowNode node) subNodes.put(node.getId(), node);
+        if (element instanceof SequenceFlow flow) subFlows.add(flow);
     }
 
+    if (subNodes.isEmpty()) {
+        return;
+    }
+
+
+    NodeLayout realParentLayout;
+    if (adHocSubProcessIds.contains(subProcess.getId())) {
+        realParentLayout = parentLayouts.get(subProcess.getId());
+    } else if (subProcess instanceof Transaction) {
+        realParentLayout = measureTransactionContainer(subNodes, subFlows)
+                .withY(parentLayouts.get(subProcess.getId()) != null
+                        ? parentLayouts.get(subProcess.getId()).y() : 0);
+        realParentLayout = new NodeLayout(
+                parentLayouts.get(subProcess.getId()) != null ? parentLayouts.get(subProcess.getId()).x() : 0,
+                realParentLayout.y(),
+                realParentLayout.width(),
+                realParentLayout.height());
+    } else {
+        NodeLayout measured = measureExpandedSubProcessContainer(subNodes, subFlows);
+        NodeLayout fixedParent = parentLayouts.get(subProcess.getId());
+        realParentLayout = new NodeLayout(
+                fixedParent != null ? fixedParent.x() : 0,
+                fixedParent != null ? fixedParent.y() : 0,
+                measured.width(),
+                measured.height());
+    }
+
+    Map<String, NodeLayout> subLayouts;
+    if (adHocSubProcessIds.contains(subProcess.getId())) {
+        subLayouts = calculateAdHocLayouts(subNodes, subProcess, realParentLayout);
+    } else {
+        subLayouts = calculateSubProcessLayouts(subNodes, subFlows, realParentLayout);
+    }
+
+    for (FlowNode node : subNodes.values()) {
+        createBpmnShape(modelInstance, plane, node, subLayouts.get(node.getId()), usedDiIds);
+    }
+    for (SequenceFlow flow : subFlows) {
+        createBpmnEdgeRouted(modelInstance, plane, flow, subLayouts, usedDiIds);
+    }
+
+    createCollapsedSubProcessDiagrams(modelInstance, definitions, subNodes.values(), usedDiIds, subLayouts);
+}
     private void createTransactionDiagram(
             BpmnModelInstance modelInstance,
             Definitions definitions,
@@ -1063,52 +1109,48 @@ private NodeLayout measureTransactionContainer(
     }
 
     private Map<String, Integer> calculateLevels(Collection<String> nodeIds, GraphIndex graph) {
-        Map<String, Integer> levels   = new HashMap<>();
-        Map<String, Integer> indegree = new HashMap<>();
-        Queue<String> ready           = new ArrayDeque<>();
-        Set<String> visited           = new HashSet<>();
-        Set<String> loopEdges         = new HashSet<>();
+    Map<String, Integer> levels = new HashMap<>();
+    Map<String, Integer> indegree = new HashMap<>();
+    Queue<String> ready = new ArrayDeque<>();
+    Set<String> visited = new HashSet<>();
 
+    // Initialisation
+    for (String nodeId : nodeIds) {
+        levels.put(nodeId, 0);
+        int inCount = graph.incoming().getOrDefault(nodeId, List.of()).size();
+        indegree.put(nodeId, inCount);
+        if (inCount == 0) ready.add(nodeId);
+    }
 
-
-        for (String nodeId : nodeIds) {
-            levels.put(nodeId, 0);
-            int inCount = graph.incoming().getOrDefault(nodeId, List.of()).size();
-            indegree.put(nodeId, inCount);
-            if (inCount == 0) ready.add(nodeId);
+    while (visited.size() < nodeIds.size()) {
+        if (ready.isEmpty()) {
+            nodeIds.stream().filter(id -> !visited.contains(id)).findFirst().ifPresent(ready::add);
         }
-
-         while (visited.size() < nodeIds.size()) {
-            if (ready.isEmpty()) {
-                nodeIds.stream().filter(id -> !visited.contains(id)).findFirst().ifPresent(ready::add);
-            }
-            String srcId = ready.remove();
-            if (!visited.add(srcId)) {
+        String srcId = ready.remove();
+        if (!visited.add(srcId)) continue;
+        
+        int sourceLevel = levels.getOrDefault(srcId, 0);
+        for (String tgtId : graph.outgoing().getOrDefault(srcId, List.of())) {
+            int targetLevel = levels.getOrDefault(tgtId, 0);
+            
+            // Ne pas traiter les edges qui reviennent en arrière
+            if (visited.contains(tgtId) && targetLevel <= sourceLevel) {
                 continue;
             }
-        int sourceLevel = levels.getOrDefault(srcId, 0);
-            for (String tgtId : graph.outgoing().getOrDefault(srcId, List.of())) {
-                int targetLevel = levels.getOrDefault(tgtId, 0);
 
-                // Backward/loop edges must not influence layering.
-                if (visited.contains(tgtId) && targetLevel <= sourceLevel) {
-                    loopEdges.add(srcId + "->" + tgtId);
-                    continue;
-                }
+            int candidate = sourceLevel + 1;
+            if (candidate > targetLevel) {
+                levels.put(tgtId, candidate);
+            }
 
-                int candidate = sourceLevel + 1;
-                if (candidate > targetLevel) {
-                    levels.put(tgtId, candidate);
-                }
-
-                int newIndegree = indegree.merge(tgtId, -1, Integer::sum);
-                if (newIndegree <= 0) {
-                    ready.add(tgtId);
-                }
+            int newIndegree = indegree.merge(tgtId, -1, Integer::sum);
+            if (newIndegree <= 0) {
+                ready.add(tgtId);
             }
         }
-        return levels;
     }
+    return levels;
+}
 
     private Map<Integer, List<FlowNode>> groupNodesByLevel(
             Collection<FlowNode> nodes,
@@ -1150,41 +1192,97 @@ private NodeLayout measureTransactionContainer(
     }
 
     private Map<String, NodeLayout> balanceGatewayBranches(
-            Map<String, NodeLayout> nodeLayouts,
-            Map<Integer, List<FlowNode>> nodesByLevel,
-            GraphIndex graph) {
+        Map<String, NodeLayout> nodeLayouts,
+        Map<Integer, List<FlowNode>> nodesByLevel,
+        GraphIndex graph) {
 
-        Map<String, NodeLayout> balanced = new HashMap<>(nodeLayouts);
-        Map<String, Integer> levelByNodeId = new HashMap<>();
-        nodesByLevel.forEach((level, nodes) -> nodes.forEach(n -> levelByNodeId.put(n.getId(), level)));
+    Map<String, NodeLayout> balanced = new HashMap<>(nodeLayouts);
+    Map<String, Integer> levelByNodeId = new HashMap<>();
+    nodesByLevel.forEach((level, nodes) -> nodes.forEach(n -> levelByNodeId.put(n.getId(), level)));
 
-        for (Map.Entry<Integer, List<FlowNode>> entry : nodesByLevel.entrySet()) {
-            for (FlowNode node : entry.getValue()) {
-                List<String> outgoing = graph.outgoing().getOrDefault(node.getId(), List.of());
-                if (!isGateway(node) || outgoing.size() < 2) continue;
+    for (Map.Entry<Integer, List<FlowNode>> entry : nodesByLevel.entrySet()) {
+        for (FlowNode node : entry.getValue()) {
+            List<String> outgoing = graph.outgoing().getOrDefault(node.getId(), List.of());
+            if (!isGateway(node) || outgoing.size() < 2) continue;
 
-                List<String> nextLevelTargets = outgoing.stream()
-                        .filter(tId -> levelByNodeId.getOrDefault(tId, -1) == entry.getKey() + 1)
-                        .filter(tId -> graph.incoming().getOrDefault(tId, List.of()).size() == 1)
-                        .toList();
-                if (nextLevelTargets.size() < 2) continue;
+            List<String> sortedTargets = outgoing.stream()
+                .sorted(Comparator.comparingDouble(tId -> {
+                    NodeLayout layout = balanced.get(tId);
+                    return layout != null ? layout.centerY() : 0;
+                }))
+                .toList();
 
-                double gatewayCenterY = balanced.get(node.getId()).centerY();
-                double branchGap =
-                Math.max(MIN_VERTICAL_GAP + 80, verticalGapForLayouts(nextLevelTargets, balanced));
-                double firstCenterY   = gatewayCenterY - ((nextLevelTargets.size() - 1) * branchGap / 2);
+            if (sortedTargets.size() < 2) continue;
 
-                for (int i = 0; i < nextLevelTargets.size(); i++) {
-                    String tId    = nextLevelTargets.get(i);
-                    NodeLayout cur = balanced.get(tId);
-                    double newY   = firstCenterY + (i * branchGap) - (cur.height() / 2);
-                    balanced.put(tId, cur.withY(Math.max(START_Y, newY)));
+            NodeLayout gatewayLayout = balanced.get(node.getId());
+            double gatewayCenterY = gatewayLayout.centerY();
+            double gatewayTop = gatewayLayout.y();
+            double gatewayBottom = gatewayLayout.y() + gatewayLayout.height();
+            int branchCount = sortedTargets.size();
+
+            for (int i = 0; i < sortedTargets.size(); i++) {
+                String tId = sortedTargets.get(i);
+                NodeLayout cur = balanced.get(tId);
+                double newY;
+
+                if (branchCount == 3) {
+                    switch (i) {
+                        case 0:
+                            newY = gatewayTop - cur.height() - 60;
+                            break;
+                        case 1:
+                            newY = gatewayCenterY - cur.height() / 2;
+                            break;
+                        case 2:
+                            newY = gatewayBottom + 60;
+                            break;
+                        default:
+                            newY = gatewayCenterY - cur.height() / 2 + (i - 1) * 140;
+                    }
+                } else if (branchCount == 2) {
+                    switch (i) {
+                        case 0:
+                            newY = gatewayTop - cur.height() - 40;
+                            break;
+                        case 1:
+                            newY = gatewayBottom + 40;
+                            break;
+                        default:
+                            newY = gatewayCenterY - cur.height() / 2;
+                    }
+                } else {
+                    double spacing = (gatewayLayout.height() * 2 + (branchCount - 1) * 80) / (branchCount + 1);
+                    newY = gatewayTop - 40 + (i + 1) * spacing - cur.height() / 2;
                 }
+
+                newY = Math.max(30, newY);
+                balanced.put(tId, cur.withY(newY));
+            }
+
+            // FIX: the branch positions computed above use each target's OWN
+            // height independently. When sibling targets have very different
+            // heights (e.g. two expanded subprocess containers vs. a small
+            // task), the resulting Y values can still overlap even though each
+            // was individually "correct". Re-sort by the Y just assigned and
+            // push down any branch whose box overlaps the one immediately
+            // above it, this time comparing real heights pairwise.
+            List<String> orderedByNewY = new ArrayList<>(sortedTargets);
+            orderedByNewY.sort(Comparator.comparingDouble(tId -> balanced.get(tId).y()));
+
+            double minNextY = -Double.MAX_VALUE;
+            for (String tId : orderedByNewY) {
+                NodeLayout cur = balanced.get(tId);
+                if (cur.y() < minNextY) {
+                    cur = cur.withY(minNextY);
+                    balanced.put(tId, cur);
+                }
+                minNextY = cur.y() + cur.height() + 40;
             }
         }
-        normalizeLevelSpacing(balanced, nodesByLevel);
-        return balanced;
     }
+
+    return balanced;
+}
 
     private void normalizeLevelSpacing(
             Map<String, NodeLayout> nodeLayouts,
@@ -1429,12 +1527,12 @@ private NodeLayout measureTransactionContainer(
         boolean isLoop    = targetLayout.right() <= sourceLayout.x() + 10;
 
         if (isLoop) {
-            routeLoopEdge(modelInstance, edge, sourceLayout, targetLayout, nodeLayouts);
+            routeLoopEdge(modelInstance, edge, sequenceFlow, sourceLayout, targetLayout, nodeLayouts);
         } else if (isForward) {
             routeForwardEdge(modelInstance, edge, sequenceFlow, sourceLayout, targetLayout, nodeLayouts);
         } else {
             // Same-level or crossing edge — route below both nodes
-            routeAroundEdge(modelInstance, edge, sourceLayout, targetLayout, nodeLayouts);
+            routeAroundEdge(modelInstance, edge, sequenceFlow, sourceLayout, targetLayout, nodeLayouts);
         }
 
         plane.addChildElement(edge);
@@ -1453,55 +1551,242 @@ private NodeLayout measureTransactionContainer(
         NodeLayout tgt,
         Map<String, NodeLayout> allLayouts) {
 
-    double sx = src.right();
-    double sy = src.centerY();
+    ExitPoint exit = (sequenceFlow != null && sequenceFlow.getSource() != null && isGateway(sequenceFlow.getSource()))
+            ? gatewayOutgoingExitPoint(sequenceFlow, src, allLayouts)
+            : new ExitPoint(src.right(), src.centerY());
+
+    double sx = exit.x();
+    double sy = exit.y();
     double tx = tgt.x();
-    double ty = gatewayIncomingTargetY(sequenceFlow, tgt, allLayouts);
+    double ty = tgt.centerY();
 
-    double horizontalDist = tx - sx;
-    double verticalDist   = Math.abs(ty - sy);
+    // Déterminer le type de branche en fonction de la position de la cible
+    double srcCenterY = src.centerY();
+    boolean isTopBranch = tgt.y() + tgt.height() < src.y();
+    boolean isBottomBranch = tgt.y() > src.y() + src.height();
+    boolean isMiddleBranch = !isTopBranch && !isBottomBranch;
 
-    double midX = findClearMidpointX(sx, tx, sy, ty, allLayouts);
-    Double mergeCorridorX = mergeIncomingCorridorX(sequenceFlow, sx, tx, allLayouts);
-
+    // Point de départ du edge
     addWaypoint(modelInstance, edge, sx, sy);
-    if (mergeCorridorX != null) {
-        double safeTy = findClearHorizontalY(mergeCorridorX, tx, ty, allLayouts);
 
-        addWaypoint(modelInstance, edge, mergeCorridorX, sy);
-        addWaypoint(modelInstance, edge, mergeCorridorX, safeTy);
-        addWaypoint(modelInstance, edge, tx, safeTy);
-
-        if (safeTy != ty) {
-            addWaypoint(modelInstance, edge, tx, ty);
+    if (isBottomBranch) {
+        // Branche du bas : descend verticalement puis va horizontalement
+        double targetY = tgt.y() + tgt.height() / 2;
+        double corridorX = sx + 30;
+        
+        // Descendre depuis le gateway
+        addWaypoint(modelInstance, edge, sx, sy);
+        addWaypoint(modelInstance, edge, sx, targetY);
+        addWaypoint(modelInstance, edge, corridorX, targetY);
+        addWaypoint(modelInstance, edge, tx, targetY);
+        
+    } else if (isTopBranch) {
+        // Branche du haut : monte verticalement puis va horizontalement
+        double targetY = tgt.y() + tgt.height() / 2;
+        double corridorX = sx + 30;
+        
+        // Monter depuis le gateway
+        addWaypoint(modelInstance, edge, sx, sy);
+        addWaypoint(modelInstance, edge, sx, targetY);
+        addWaypoint(modelInstance, edge, corridorX, targetY);
+        addWaypoint(modelInstance, edge, tx, targetY);
+        
+    } else {
+        // Branche du milieu : route horizontale simple
+        double midX = sx + (tx - sx) * 0.5;
+        
+        // Vérifier si le chemin horizontal est bloqué
+        for (NodeLayout layout : allLayouts.values()) {
+            if (layout == src || layout == tgt) continue;
+            boolean xOverlap = midX >= layout.x() && midX <= layout.right();
+            boolean yOverlap = sy >= layout.y() && sy <= layout.y() + layout.height();
+            if (xOverlap && yOverlap) {
+                midX = layout.right() + 20;
+                break;
+            }
         }
-        return;
-    }
-
-    if (verticalDist <= EDGE_VERTICAL_SPLIT_THRESHOLD) {
+        
+        addWaypoint(modelInstance, edge, sx, sy);
         addWaypoint(modelInstance, edge, midX, sy);
         addWaypoint(modelInstance, edge, midX, ty);
         addWaypoint(modelInstance, edge, tx, ty);
-        return;
+    }
+}
+    /**
+     * Gives each outgoing sequence flow from a split gateway its own exit point
+     * on the gateway border and a dedicated vertical corridor. This prevents
+     * branches from sharing a common segment while keeping them visually
+     * connected to the gateway outline.
+     */
+    private record ExitPoint(double x, double y) {}
+
+private ExitPoint gatewayOutgoingExitPoint(
+        SequenceFlow sequenceFlow,
+        NodeLayout sourceLayout,
+        Map<String, NodeLayout> allLayouts) {
+
+    List<SequenceFlow> outgoing = sortedOutgoingSequenceFlows(sequenceFlow, allLayouts);
+    if (outgoing.size() <= 1) {
+        return new ExitPoint(sourceLayout.right(), sourceLayout.centerY());
     }
 
-    double splitX = sx + Math.max(40, horizontalDist * 0.33);
-    double safeX  = Math.max(splitX, midX);
-
-    // FIX: the LAST horizontal run (y=ty, from safeX to tx) was never checked.
-    // That is the segment that actually cuts through tall containers like
-    // an expanded subprocess sitting between safeX and tx.
-    double safeTy = findClearHorizontalY(safeX, tx, ty, allLayouts);
-
-    addWaypoint(modelInstance, edge, safeX, sy);
-    addWaypoint(modelInstance, edge, safeX, safeTy);
-    addWaypoint(modelInstance, edge, tx, safeTy);
-
-    if (safeTy != ty) {
-        // Detour was needed: come back down/up to the real target height
-        // with one extra elbow right before reaching tx.
-        addWaypoint(modelInstance, edge, tx, ty);
+    int branchIndex = outgoingFlowIndex(sequenceFlow, outgoing);
+    if (branchIndex < 0) {
+        return new ExitPoint(sourceLayout.right(), sourceLayout.centerY());
     }
+
+    double cx = sourceLayout.centerX();
+    double cy = sourceLayout.centerY();
+
+    boolean isTopmost    = branchIndex == 0;
+    boolean isBottommost = branchIndex == outgoing.size() - 1;
+
+    if (isTopmost) {
+        return new ExitPoint(cx, sourceLayout.y()); // top edge
+    }
+    if (isBottommost) {
+        return new ExitPoint(cx, sourceLayout.y() + sourceLayout.height()); // bottom edge
+    }
+
+    // Middle branch(es): spread them along the right edge instead of
+    // collapsing them onto the same point.
+    int middleCount = outgoing.size() - 2; // excludes topmost and bottommost
+    int middleIndex = branchIndex - 1;     // 0-based among middle branches
+    double spacing = sourceLayout.height() / (middleCount + 1);
+    double offsetY = (middleIndex + 1) * spacing - (sourceLayout.height() / 2.0);
+    return new ExitPoint(sourceLayout.right(), cy + offsetY);
+}
+
+private List<SequenceFlow> sortedOutgoingSequenceFlows(
+        SequenceFlow sequenceFlow,
+        Map<String, NodeLayout> allLayouts) {
+
+    if (sequenceFlow == null || sequenceFlow.getSource() == null || !isGateway(sequenceFlow.getSource())) {
+        return List.of();
+    }
+
+    List<SequenceFlow> outgoing = new ArrayList<>(sequenceFlow.getSource().getOutgoing());
+    
+    // Trier par position Y de la cible
+    outgoing.sort(Comparator.comparingDouble(
+        (SequenceFlow flow) -> {
+            NodeLayout targetLayout = allLayouts.get(flow.getTarget().getId());
+            return targetLayout != null ? targetLayout.y() : 0;
+        }
+    ));
+    
+    return outgoing;
+}
+
+    private Double gatewayOutgoingCorridorX(
+        SequenceFlow sequenceFlow,
+        double sourceRight,
+        Map<String, NodeLayout> allLayouts) {
+
+    List<SequenceFlow> outgoing = sortedOutgoingSequenceFlows(sequenceFlow, allLayouts);
+    if (outgoing.size() <= 1) {
+        return null;
+    }
+
+    int branchIndex = outgoingFlowIndex(sequenceFlow, outgoing);
+    if (branchIndex < 0) {
+        return null;
+    }
+
+    // GENERALIZED: same corridor spacing rule regardless of branch count.
+    double corridorSpacing = 60;
+    double sourcePadding = 20;
+    return sourceRight + sourcePadding + (branchIndex * corridorSpacing);
+}
+    private int outgoingFlowIndex(
+            SequenceFlow sequenceFlow,
+            List<SequenceFlow> outgoing) {
+
+        for (int i = 0; i < outgoing.size(); i++) {
+            if (outgoing.get(i).getId().equals(sequenceFlow.getId())) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+   private double gatewayIncomingTargetY(
+        SequenceFlow sequenceFlow,
+        NodeLayout targetLayout,
+        Map<String, NodeLayout> allLayouts) {
+
+    if (sequenceFlow == null || sequenceFlow.getTarget() == null || !isGateway(sequenceFlow.getTarget())) {
+        return targetLayout.centerY();
+    }
+
+    List<SequenceFlow> incoming = sortedIncomingSequenceFlows(sequenceFlow, allLayouts);
+    if (incoming.size() <= 1) {
+        return targetLayout.centerY();
+    }
+
+    int incomingIndex = incomingFlowIndex(sequenceFlow, incoming);
+    if (incomingIndex < 0) {
+        return targetLayout.centerY();
+    }
+
+    NodeLayout sourceLayout = allLayouts.get(sequenceFlow.getSource().getId());
+    if (sourceLayout == null) {
+        return targetLayout.centerY();
+    }
+
+    // Déterminer si la source est en haut, au milieu ou en bas par rapport au gateway
+    boolean sourceIsTop = sourceLayout.y() + sourceLayout.height() < targetLayout.y();
+    boolean sourceIsBottom = sourceLayout.y() > targetLayout.y() + targetLayout.height();
+    boolean sourceIsMiddle = !sourceIsTop && !sourceIsBottom;
+
+    double cx = targetLayout.centerX();
+    double cy = targetLayout.centerY();
+
+    if (sourceIsTop) {
+        // Source en haut → arriver par le HAUT du gateway
+        return targetLayout.y();
+    } else if (sourceIsBottom) {
+        // Source en bas → arriver par le BAS du gateway
+        return targetLayout.y() + targetLayout.height();
+    } else {
+        // Source au milieu → arriver par la DROITE du gateway
+        double spacing = targetLayout.height() / (incoming.size() + 1);
+        double yOffset = (incomingIndex + 1) * spacing - targetLayout.height() / 2;
+        return cy + yOffset;
+    }
+}
+
+private List<SequenceFlow> sortedIncomingSequenceFlows(
+        SequenceFlow sequenceFlow,
+        Map<String, NodeLayout> allLayouts) {
+
+    if (sequenceFlow == null || sequenceFlow.getTarget() == null) {
+        return List.of();
+    }
+
+    List<SequenceFlow> incoming = new ArrayList<>(sequenceFlow.getTarget().getIncoming());
+
+    incoming.sort(Comparator.comparingDouble(
+        (SequenceFlow flow) -> {
+            NodeLayout sourceLayout = allLayouts.get(flow.getSource().getId());
+            return sourceLayout != null ? sourceLayout.centerY() : 0;
+        }
+    ));
+
+    return incoming;
+}
+
+private int incomingFlowIndex(
+        SequenceFlow sequenceFlow,
+        List<SequenceFlow> incoming) {
+
+    for (int i = 0; i < incoming.size(); i++) {
+        if (incoming.get(i).getId().equals(sequenceFlow.getId())) {
+            return i;
+        }
+    }
+
+    return -1;
 }
  /**
      * Gives each incoming sequence flow to a merge target its own vertical
@@ -1525,78 +1810,45 @@ private NodeLayout measureTransactionContainer(
             return null;
         }
 
-        double corridorSpacing = 50;
+        
         double targetPadding = 20;
         double corridorX = targetLeft
                 - targetPadding
-                - ((incoming.size() - 1 - incomingIndex) * corridorSpacing);
+                - ((incoming.size() - 1 - incomingIndex) * MERGE_INCOMING_CORRIDOR_SPACING);
 
         if (corridorX <= sourceRight + targetPadding) {
-            corridorX = sourceRight + targetPadding + (incomingIndex * corridorSpacing);
+            corridorX = sourceRight + targetPadding + (incomingIndex * MERGE_INCOMING_CORRIDOR_SPACING);
         }
         return corridorX;
     }
 
-    /**
-     * Visually separates incoming sequence flows on merge gateways by assigning
-     * each flow a distinct target Y around the gateway center. Non-gateway
-     * targets and gateways with a single incoming sequence flow keep centerY.
-     */
-    private double gatewayIncomingTargetY(
+   
+    private double gatewayOutgoingSourceY(
             SequenceFlow sequenceFlow,
-            NodeLayout targetLayout,
+            NodeLayout sourceLayout,
             Map<String, NodeLayout> allLayouts) {
 
         if (sequenceFlow == null
-                || sequenceFlow.getTarget() == null
-                || !isGateway(sequenceFlow.getTarget())) {
-            return targetLayout.centerY();
+                || sequenceFlow.getSource() == null
+                || !isGateway(sequenceFlow.getSource())) {
+            return sourceLayout.centerY();
         }
 
-        List<SequenceFlow> incoming = sortedIncomingSequenceFlows(sequenceFlow, allLayouts);
-        if (incoming.size() <= 1) {
-            return targetLayout.centerY();
+        List<SequenceFlow> outgoing = sortedOutgoingSequenceFlows(sequenceFlow, allLayouts);
+        if (outgoing.size() <= 1) {
+            return sourceLayout.centerY();
         }
 
-        int incomingIndex = incomingFlowIndex(sequenceFlow, incoming);
-        if (incomingIndex < 0) {
-            return targetLayout.centerY();
+        int outgoingIndex = outgoingFlowIndex(sequenceFlow, outgoing);
+        if (outgoingIndex < 0) {
+            return sourceLayout.centerY();
         }
 
-        double targetSpacing = 30;
-        double centerOffset = (incoming.size() - 1) / 2.0;
-        return targetLayout.centerY() + ((incomingIndex - centerOffset) * targetSpacing);
+        double centerOffset = (outgoing.size() - 1) / 2.0;
+        return sourceLayout.centerY() + ((outgoingIndex - centerOffset) * GATEWAY_OUTGOING_CORRIDOR_GAP);
     }
 
-    private List<SequenceFlow> sortedIncomingSequenceFlows(
-            SequenceFlow sequenceFlow,
-            Map<String, NodeLayout> allLayouts) {
-
-        if (sequenceFlow == null || sequenceFlow.getTarget() == null) {
-            return List.of();
-        }
-
-        return sequenceFlow.getTarget().getIncoming().stream()
-                .filter(flow -> allLayouts.containsKey(flow.getSource().getId()))
-                .filter(flow -> allLayouts.containsKey(flow.getTarget().getId()))
-                .sorted(Comparator
-                        .comparingDouble((SequenceFlow flow) ->
-                                allLayouts.get(flow.getSource().getId()).centerY())
-                        .thenComparing(SequenceFlow::getId))
-                .toList();
-    }
-
-    private int incomingFlowIndex(
-            SequenceFlow sequenceFlow,
-            List<SequenceFlow> incoming) {
-
-        for (int i = 0; i < incoming.size(); i++) {
-            if (incoming.get(i).getId().equals(sequenceFlow.getId())) {
-                return i;
-            }
-        }
-        return -1;
-    }
+    
 /**
  * Checks whether a horizontal segment at height y, spanning [x1, x2], cuts
  * through any node's bounding box. If so, returns a y just above that node's
@@ -1626,6 +1878,7 @@ private double findClearHorizontalY(
     private void routeLoopEdge(
             BpmnModelInstance modelInstance,
             BpmnEdge edge,
+            SequenceFlow sequenceFlow,
             NodeLayout src,
             NodeLayout tgt,
             Map<String, NodeLayout> allLayouts) {
@@ -1666,11 +1919,14 @@ private double findClearHorizontalY(
         double preferredDetourX = Math.min(src.x(), tgt.right()) - minDetourGap;
         double detourX = Math.max(tgt.right() + 20, preferredDetourX);
 
-        addWaypoint(modelInstance, edge, src.x(), src.centerY());
+        double sy = gatewayOutgoingSourceY(sequenceFlow, src, allLayouts);
+        double ty = gatewayIncomingTargetY(sequenceFlow, tgt, allLayouts);
+
+        addWaypoint(modelInstance, edge, src.x(), sy);
         addWaypoint(modelInstance, edge, src.x(), loopBottom);
         addWaypoint(modelInstance, edge, detourX, loopBottom);
-        addWaypoint(modelInstance, edge, detourX, tgt.centerY());
-        addWaypoint(modelInstance, edge, tgt.right(), tgt.centerY());
+        addWaypoint(modelInstance, edge, detourX, ty);
+        addWaypoint(modelInstance, edge, tgt.right(), ty);
     }
 
     /**
@@ -1679,6 +1935,7 @@ private double findClearHorizontalY(
     private void routeAroundEdge(
         BpmnModelInstance modelInstance,
         BpmnEdge edge,
+        SequenceFlow sequenceFlow,
         NodeLayout src,
         NodeLayout tgt,
         Map<String, NodeLayout> allLayouts) {
@@ -1699,9 +1956,9 @@ private double findClearHorizontalY(
     }
 
     double sx = src.right();
-    double sy = src.centerY();
+    double sy = gatewayOutgoingSourceY(sequenceFlow, src, allLayouts);
     double tx = tgt.x();
-    double ty = tgt.centerY();
+    double ty = gatewayIncomingTargetY(sequenceFlow, tgt, allLayouts);
 
     addWaypoint(modelInstance, edge, sx, sy);
     addWaypoint(modelInstance, edge, sx, belowY);
@@ -1789,11 +2046,11 @@ private double findClearHorizontalY(
         boolean isLoop    = targetLayout.right() <= sourceLayout.x() + 10;
 
         if (isLoop) {
-            routeLoopEdge(modelInstance, edge, sourceLayout, targetLayout, nodeLayouts);
+            routeLoopEdge(modelInstance, edge, null, sourceLayout, targetLayout, nodeLayouts);
         } else if (isForward) {
             routeForwardEdge(modelInstance, edge, null, sourceLayout, targetLayout, nodeLayouts);
         } else {
-            routeAroundEdge(modelInstance, edge, sourceLayout, targetLayout, nodeLayouts);
+            routeAroundEdge(modelInstance, edge, null, sourceLayout, targetLayout, nodeLayouts);
         }
         plane.addChildElement(edge);
     }

@@ -170,9 +170,7 @@ public class ZeebeCompatibilityService {
         return null;
     }
 
-    private boolean hasConditionalFlow(List<Element> outgoingFlows) {
-        return outgoingFlows.stream().anyMatch(this::hasConditionExpression);
-    }
+   
 
     private boolean hasConditionExpression(Element sequenceFlow) {
         NodeList childNodes = sequenceFlow.getChildNodes();

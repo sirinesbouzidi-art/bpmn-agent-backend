@@ -45,12 +45,30 @@ public class CamundaService {
         System.out.println(zeebeCompatibleXml);
         System.out.println(
                 "================================");
+System.out.println("===== FLOW_3 =====");
+int idx3 = zeebeCompatibleXml.indexOf("id=\"flow_3\"");
+if (idx3 != -1) {
+    System.out.println(
+        zeebeCompatibleXml.substring(
+            Math.max(0, idx3 - 200),
+            Math.min(zeebeCompatibleXml.length(), idx3 + 600)
+        )
+    );
+}
 
+System.out.println("===== FLOW_4 =====");
+int idx4 = zeebeCompatibleXml.indexOf("id=\"flow_4\"");
+if (idx4 != -1) {
+    System.out.println(
+        zeebeCompatibleXml.substring(
+            Math.max(0, idx4 - 200),
+            Math.min(zeebeCompatibleXml.length(), idx4 + 600)
+        )
+    );
+}
         DeploymentEvent deploymentEvent =
                 client.newDeployResourceCommand()
-                        .addResourceBytes(
-                                zeebeCompatibleXml.getBytes(StandardCharsets.UTF_8),
-                                sanitizeProcessName(processName) + ".bpmn")
+                        .addResourceBytes( zeebeCompatibleXml.getBytes(StandardCharsets.UTF_8), sanitizeProcessName(processName) + ".bpmn")
                         .send()
                         .join();
 
@@ -73,9 +91,7 @@ public class CamundaService {
         root = root.getCause();
     }
 
-    System.out.println(
-            "ROOT CAUSE = "
-                    + root.getMessage());
+    System.out.println( "ROOT CAUSE = " + root.getMessage());
 
     throw ex;
         }

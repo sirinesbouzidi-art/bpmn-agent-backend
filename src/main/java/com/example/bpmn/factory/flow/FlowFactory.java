@@ -141,6 +141,14 @@ public class FlowFactory {
         if (flow.getName() != null) {
             sequenceFlow.setName(flow.getName());
         }
+        System.out.println(
+             "FLOW="
+              + flow.getId()
+              + " | condition="
+              + flow.getCondition()
+              + " | default="
+              + flow.getDefaultFlow()
+            );
  
         String condition = flow.getCondition();
         if (condition != null && !condition.isBlank()) {

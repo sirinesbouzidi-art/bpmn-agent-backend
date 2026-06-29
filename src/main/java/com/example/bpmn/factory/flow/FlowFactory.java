@@ -151,11 +151,24 @@ public class FlowFactory {
             );
  
         String condition = flow.getCondition();
-        if (condition != null && !condition.isBlank()) {
-            ConditionExpression conditionExpression = modelInstance.newInstance(ConditionExpression.class);
-            conditionExpression.setTextContent(condition);
-            sequenceFlow.setConditionExpression(conditionExpression);
-        }
+
+System.out.println(">>> ENTER CONDITION BLOCK <<<");
+System.out.println("condition = [" + condition + "]");
+
+if (condition != null && !condition.isBlank()) {
+
+    System.out.println(">>> CONDITION IS VALID <<<");
+
+    ConditionExpression conditionExpression =
+            modelInstance.newInstance(ConditionExpression.class);
+
+    conditionExpression.setTextContent(condition);
+
+    sequenceFlow.setConditionExpression(conditionExpression);
+
+    System.out.println("FLOW XML CONDITION = "
+            + sequenceFlow.getConditionExpression());
+}
  
         // Add to the correct parent container
         if (process != null) {

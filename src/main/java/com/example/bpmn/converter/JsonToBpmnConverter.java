@@ -332,77 +332,153 @@ public class JsonToBpmnConverter {
      * PASS 2 — Neighbor displacement: push right-neighbors away from grown containers
      * PASS 3+4 — Orthogonal edge routing and BPMN DI generation
      */
-    private void applyCamundaModelApiLayout(
-            BpmnModelInstance modelInstance,
-            Process process,
-            Map<String, FlowNode> nodesById,
-            Map<String, BaseElement> elementsById,
-            List<SequenceFlow> sequenceFlows,
-            List<BaseElement> extraEdges
-    ) {
-        try {
-            Definitions definitions = modelInstance.getDefinitions();
-            definitions.setTargetNamespace(BpmnModelConstants.BPMN20_NS);
-            new ArrayList<>(definitions.getBpmDiagrams()).forEach(definitions::removeChildElement);
+private void applyCamundaModelApiLayout(
+        BpmnModelInstance modelInstance,
+        Process process,
+        Map<String, FlowNode> nodesById,
+        Map<String, BaseElement> elementsById,
+        List<SequenceFlow> sequenceFlows,
+        List<BaseElement> extraEdges
+) {
+    try {
 
-            Set<String> usedDiIds = new HashSet<>();
-
-            // ── PASS 0: Bottom-up size computation ──────────────────────────
-            globalNodeLayouts.clear();
-            computeContainerSizesBottomUp(nodesById);
-
-            // ── PASS 1: Top-down position assignment using final sizes ───────
-            Map<String, NodeLayout> nodeLayouts = assignPositionsTopDown(nodesById, sequenceFlows);
-            globalNodeLayouts.putAll(nodeLayouts);
-
-            // ── PASS 2: Neighbor displacement ────────────────────────────────
-            GraphIndex graph = buildGraphIndex(nodesById, sequenceFlows);
-            Map<String, Integer> levels = calculateLevels(nodesById.keySet(), graph);
-            Map<Integer, List<FlowNode>> nodesByLevel = groupNodesByLevel(nodesById.values(), levels);
-            Map<String, Integer> levelByNodeId = new HashMap<>();
-            nodesByLevel.forEach((lvl, nodes) -> nodes.forEach(n -> levelByNodeId.put(n.getId(), lvl)));
-
-            resolveContainerOverlaps(nodeLayouts, nodesByLevel, levelByNodeId);
-            recenterJoinNodes(nodeLayouts, graph, nodesByLevel, levelByNodeId);
-            globalNodeLayouts.putAll(nodeLayouts);
-
-            // ── PASS 3+4: BPMN DI generation with corrected edge routing ─────
-            BpmnDiagram diagram = modelInstance.newInstance(BpmnDiagram.class);
-            diagram.setId(stableDiId("BPMNDiagram", process.getId(), modelInstance, usedDiIds));
-            BpmnPlane plane = modelInstance.newInstance(BpmnPlane.class);
-            plane.setId(stableDiId("BPMNPlane", process.getId(), modelInstance, usedDiIds));
-            Collaboration collaboration = definitions.getChildElementsByType(Collaboration.class).stream().findFirst().orElse(null);
-            boolean hasMessageFlow = extraEdges.stream().anyMatch(MessageFlow.class::isInstance);
-            plane.setBpmnElement(hasMessageFlow && collaboration != null ? collaboration : process);
-            diagram.setBpmnPlane(plane);
-            definitions.addChildElement(diagram);
-
-            Map<String, NodeLayout> allLayouts = new LinkedHashMap<>(nodeLayouts);
-            allLayouts.putAll(computeArtifactLayouts(elementsById, extraEdges, nodeLayouts));
-
-            for (FlowNode node : nodesById.values()) {
-                createBpmnShape(modelInstance, plane, node, allLayouts.get(node.getId()), usedDiIds);
-            }
-            for (BaseElement element : elementsById.values()) {
-                if (!(element instanceof FlowNode) && allLayouts.containsKey(element.getId())) {
-                    createBpmnShape(modelInstance, plane, element, allLayouts.get(element.getId()), usedDiIds);
-                }
-            }
-            for (SequenceFlow sequenceFlow : sequenceFlows) {
-                createBpmnEdgeRouted(modelInstance, plane, sequenceFlow, allLayouts, usedDiIds);
-            }
-            for (BaseElement edge : extraEdges) {
-                createGenericBpmnEdge(modelInstance, plane, edge, allLayouts, usedDiIds);
-            }
-            renderExpandedAdHocContents(modelInstance, plane, nodesById.values(), nodeLayouts, usedDiIds);
-
-            // Créer les diagrammes pour les subprocess (même vides)
-            createCollapsedSubProcessDiagrams(modelInstance, definitions, nodesById.values(), usedDiIds, nodeLayouts);
-
-        } catch (BpmnModelException ex) {
-            throw new IllegalArgumentException("Unable to generate BPMN diagram layout", ex);
+        System.out.println("========== BEFORE LAYOUT ==========");
+        for (SequenceFlow sf : sequenceFlows) {
+            System.out.println(
+                    sf.getId()
+                            + " -> "
+                            + sf.getConditionExpression()
+            );
         }
+        System.out.println("===================================");
+
+        Definitions definitions = modelInstance.getDefinitions();
+        definitions.setTargetNamespace(BpmnModelConstants.BPMN20_NS);
+        new ArrayList<>(definitions.getBpmDiagrams()).forEach(definitions::removeChildElement);
+
+        Set<String> usedDiIds = new HashSet<>();
+
+        // ── PASS 0: Bottom-up size computation ──────────────────────────
+        globalNodeLayouts.clear();
+        computeContainerSizesBottomUp(nodesById);
+
+        // ── PASS 1: Top-down position assignment using final sizes ───────
+        Map<String, NodeLayout> nodeLayouts = assignPositionsTopDown(nodesById, sequenceFlows);
+        globalNodeLayouts.putAll(nodeLayouts);
+
+        // ── PASS 2: Neighbor displacement ────────────────────────────────
+        GraphIndex graph = buildGraphIndex(nodesById, sequenceFlows);
+        Map<String, Integer> levels = calculateLevels(nodesById.keySet(), graph);
+        Map<Integer, List<FlowNode>> nodesByLevel = groupNodesByLevel(nodesById.values(), levels);
+        Map<String, Integer> levelByNodeId = new HashMap<>();
+        nodesByLevel.forEach((lvl, nodes) ->
+                nodes.forEach(n -> levelByNodeId.put(n.getId(), lvl)));
+
+        resolveContainerOverlaps(nodeLayouts, nodesByLevel, levelByNodeId);
+        recenterJoinNodes(nodeLayouts, graph, nodesByLevel, levelByNodeId);
+        globalNodeLayouts.putAll(nodeLayouts);
+
+        // ── PASS 3+4: BPMN DI generation with corrected edge routing ─────
+        BpmnDiagram diagram = modelInstance.newInstance(BpmnDiagram.class);
+        diagram.setId(stableDiId("BPMNDiagram", process.getId(), modelInstance, usedDiIds));
+
+        BpmnPlane plane = modelInstance.newInstance(BpmnPlane.class);
+        plane.setId(stableDiId("BPMNPlane", process.getId(), modelInstance, usedDiIds));
+
+        Collaboration collaboration =
+                definitions.getChildElementsByType(Collaboration.class)
+                        .stream()
+                        .findFirst()
+                        .orElse(null);
+
+        boolean hasMessageFlow =
+                extraEdges.stream().anyMatch(MessageFlow.class::isInstance);
+
+        plane.setBpmnElement(
+                hasMessageFlow && collaboration != null
+                        ? collaboration
+                        : process);
+
+        diagram.setBpmnPlane(plane);
+        definitions.addChildElement(diagram);
+
+        Map<String, NodeLayout> allLayouts = new LinkedHashMap<>(nodeLayouts);
+        allLayouts.putAll(
+                computeArtifactLayouts(
+                        elementsById,
+                        extraEdges,
+                        nodeLayouts));
+
+        for (FlowNode node : nodesById.values()) {
+            createBpmnShape(
+                    modelInstance,
+                    plane,
+                    node,
+                    allLayouts.get(node.getId()),
+                    usedDiIds);
+        }
+
+        for (BaseElement element : elementsById.values()) {
+            if (!(element instanceof FlowNode)
+                    && allLayouts.containsKey(element.getId())) {
+
+                createBpmnShape(
+                        modelInstance,
+                        plane,
+                        element,
+                        allLayouts.get(element.getId()),
+                        usedDiIds);
+            }
+        }
+
+        for (SequenceFlow sequenceFlow : sequenceFlows) {
+            createBpmnEdgeRouted(
+                    modelInstance,
+                    plane,
+                    sequenceFlow,
+                    allLayouts,
+                    usedDiIds);
+        }
+
+        for (BaseElement edge : extraEdges) {
+            createGenericBpmnEdge(
+                    modelInstance,
+                    plane,
+                    edge,
+                    allLayouts,
+                    usedDiIds);
+        }
+
+        renderExpandedAdHocContents(
+                modelInstance,
+                plane,
+                nodesById.values(),
+                nodeLayouts,
+                usedDiIds);
+
+        createCollapsedSubProcessDiagrams(
+                modelInstance,
+                definitions,
+                nodesById.values(),
+                usedDiIds,
+                nodeLayouts);
+
+        System.out.println("========== AFTER LAYOUT ==========");
+        for (SequenceFlow sf : sequenceFlows) {
+            System.out.println(
+                    sf.getId()
+                            + " -> "
+                            + sf.getConditionExpression()
+            );
+        }
+        System.out.println("==================================");
+
+    } catch (BpmnModelException ex) {
+        throw new IllegalArgumentException(
+                "Unable to generate BPMN diagram layout",
+                ex);
     }
+}
 
     // =====================================================
     // PASS 0 — BOTTOM-UP SIZE COMPUTATION

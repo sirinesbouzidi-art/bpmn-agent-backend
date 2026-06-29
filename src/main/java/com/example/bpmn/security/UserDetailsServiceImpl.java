@@ -2,52 +2,73 @@ package com.example.bpmn.security;
 
 import com.example.bpmn.model.AppUser;
 import com.example.bpmn.model.Role;
+import com.example.bpmn.repository.UserRepository;
+import jakarta.annotation.PostConstruct;
 import org.springframework.security.core.GrantedAuthority;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.userdetails.User;
 import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.security.core.userdetails.UserDetailsService;
 import org.springframework.security.core.userdetails.UsernameNotFoundException;
+import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 
 @Service
 public class UserDetailsServiceImpl implements UserDetailsService {
 
-    // Remplacer Map.of() par ConcurrentHashMap pour pouvoir ajouter des utilisateurs
-    private final Map<String, AppUser> users = new ConcurrentHashMap<>();
+    private final UserRepository userRepository;
+    private final PasswordEncoder passwordEncoder;
 
-    public UserDetailsServiceImpl() {
-        // Initialiser les utilisateurs par défaut dans le constructeur
-        users.put("admin@bouygues.com", new AppUser("admin@bouygues.com", "admin123", Role.ADMIN));
-        users.put("user@bouygues.com", new AppUser("user@bouygues.com", "user123", Role.USER));
+    public UserDetailsServiceImpl(UserRepository userRepository, PasswordEncoder passwordEncoder) {
+        this.userRepository = userRepository;
+        this.passwordEncoder = passwordEncoder;
+    }
+
+    /**
+     * Crée le compte admin par défaut une seule fois, au premier démarrage.
+     * Si la base existe déjà (redémarrages suivants), ne touche à rien.
+     */
+    @PostConstruct
+    public void seedDefaultAdmin() {
+        if (!userRepository.existsById("admin@bouygues.com")) {
+            AppUser admin = new AppUser(
+                    "admin@bouygues.com",
+                    passwordEncoder.encode("admin123"),
+                    Role.ADMIN
+            );
+            userRepository.save(admin);
+        }
     }
 
     @Override
     public UserDetails loadUserByUsername(String email) throws UsernameNotFoundException {
-        AppUser appUser = users.get(email);
-        if (appUser == null) {
-            throw new UsernameNotFoundException("User not found with email: " + email);
+        AppUser appUser = userRepository.findById(email).orElseThrow(() -> new UsernameNotFoundException("User not found with email: " + email));
+        if (!appUser.active()) {
+            throw new UsernameNotFoundException("Account is deactivated: " + email);
         }
-
         GrantedAuthority authority = new SimpleGrantedAuthority("ROLE_" + appUser.role().name());
-        return new User(appUser.email(), "{noop}" + appUser.password(), List.of(authority));
+            return new User(appUser.email(), appUser.password(), List.of(authority));
     }
 
     public AppUser findByEmail(String email) {
-        return users.get(email);
+        return userRepository.findById(email).orElse(null);
     }
-    
-    // NOUVELLE MÉTHODE : pour ajouter un utilisateur
+
     public void registerUser(AppUser newUser) {
-        users.put(newUser.email(), newUser);
+        userRepository.save(newUser);
     }
-    
-    // NOUVELLE MÉTHODE : pour vérifier si un email existe
+
     public boolean existsByEmail(String email) {
-        return users.containsKey(email);
+        return userRepository.existsById(email);
+    }
+
+    public void deleteUser(String email) {
+        userRepository.deleteById(email);
+    }
+
+    public List<AppUser> findAll() {
+        return userRepository.findAll();
     }
 }

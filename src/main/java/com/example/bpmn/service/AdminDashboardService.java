@@ -5,11 +5,13 @@ import com.example.bpmn.dto.admin.DashboardActivityDTO;
 import com.example.bpmn.dto.admin.DashboardProcessDTO;
 import com.example.bpmn.dto.admin.DashboardStatusItemDTO;
 import com.example.bpmn.dto.admin.DashboardSystemStatusDTO;
+import com.example.bpmn.model.BpmnHistory;
 import com.example.bpmn.model.GeneratedBpmnModel;
 import com.example.bpmn.model.Role;
-import com.example.bpmn.repository.GeneratedBpmnModelRepository;
+import com.example.bpmn.repository.BpmnHistoryRepository;
 import com.example.bpmn.repository.UserRepository;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestClient;
@@ -28,20 +30,20 @@ public class AdminDashboardService {
     private static final Duration HEALTH_TIMEOUT = Duration.ofSeconds(2);
 
     private final UserRepository userRepository;
-    private final GeneratedBpmnModelRepository generatedBpmnModelRepository;
+    private final BpmnHistoryRepository bpmnHistoryRepository;
     private final DataSource dataSource;
     private final RestClient restClient;
     private final String fastApiHealthUrl;
     private final String camundaGatewayAddress;
 
     public AdminDashboardService(UserRepository userRepository,
-                                 GeneratedBpmnModelRepository generatedBpmnModelRepository,
+                                 BpmnHistoryRepository bpmnHistoryRepository,
                                  DataSource dataSource,
                                  RestClient.Builder restClientBuilder,
                                  @Value("${app.fastapi.health-url:http://localhost:8000/health}") String fastApiHealthUrl,
                                  @Value("${camunda.gateway-address:localhost:26500}") String camundaGatewayAddress) {
         this.userRepository = userRepository;
-        this.generatedBpmnModelRepository = generatedBpmnModelRepository;
+        this.bpmnHistoryRepository = bpmnHistoryRepository;
         this.dataSource = dataSource;
         this.restClient = restClientBuilder.requestFactory(requestFactory()).build();
         this.fastApiHealthUrl = fastApiHealthUrl;
@@ -56,7 +58,7 @@ public class AdminDashboardService {
                 userRepository.count(),
                 totalAdmins,
                 totalStandardUsers,
-                generatedBpmnModelRepository.count(),
+                bpmnHistoryRepository.count(),
                 countGeneratedToday(),
                 generationPerDay(),
                 latestProcesses(),
@@ -67,35 +69,53 @@ public class AdminDashboardService {
 
     private long countGeneratedToday() {
         LocalDate today = LocalDate.now();
-        return generatedBpmnModelRepository.countByGenerationDateBetween(today.atStartOfDay(), today.plusDays(1).atStartOfDay());
+        return bpmnHistoryRepository.countByGeneratedAtGreaterThanEqualAndGeneratedAtLessThan(today.atStartOfDay(), today.plusDays(1).atStartOfDay());
     }
 
     private List<Integer> generationPerDay() {
         LocalDate firstDay = LocalDate.now().minusDays(6);
         return firstDay.datesUntil(firstDay.plusDays(7))
-                .map(day -> (int) generatedBpmnModelRepository.countByGenerationDateBetween(day.atStartOfDay(), day.plusDays(1).atStartOfDay()))
+                .map(day -> (int) bpmnHistoryRepository.countByGeneratedAtGreaterThanEqualAndGeneratedAtLessThan(day.atStartOfDay(), day.plusDays(1).atStartOfDay()))
                 .toList();
     }
 
     private List<DashboardProcessDTO> latestProcesses() {
-        return generatedBpmnModelRepository.findTop5ByOrderByGenerationDateDesc().stream()
+       return bpmnHistoryRepository.findAllByOrderByGeneratedAtDesc(PageRequest.of(0, 5)).stream()
                 .map(this::toProcessDTO)
                 .toList();
     }
 
     private List<DashboardActivityDTO> recentActivities() {
-        return generatedBpmnModelRepository.findTop10ByOrderByGenerationDateDesc().stream()
-                .map(model -> new DashboardActivityDTO(
-                        "BPMN model generated",
-                        model.processName(),
-                        model.generationDate(),
+         return bpmnHistoryRepository.findAllByOrderByGeneratedAtDesc(PageRequest.of(0, 10)).stream()
+                .map(history -> new DashboardActivityDTO(
+                        displayAuthor(history) + " generated " + displayProcessName(history),
+                        history.getStatus(),
+                        history.getGeneratedAt(),
                         "history"
                 ))
                 .toList();
     }
 
-    private DashboardProcessDTO toProcessDTO(GeneratedBpmnModel model) {
-        return new DashboardProcessDTO(model.processName(), model.author(), model.generationDate(), model.status());
+   private DashboardProcessDTO toProcessDTO(BpmnHistory history) {
+        return new DashboardProcessDTO(
+                displayProcessName(history),
+                history.getPrompt(),
+                displayAuthor(history),
+                history.getGeneratedAt(),
+                history.getStatus()
+        );
+    }
+
+    private String displayProcessName(BpmnHistory history) {
+        return hasText(history.getProcessName()) ? history.getProcessName() : "Untitled process";
+    }
+
+    private String displayAuthor(BpmnHistory history) {
+        return hasText(history.getAuthor()) ? history.getAuthor() : "Unknown user";
+    }
+
+    private boolean hasText(String value) {
+        return value != null && !value.isBlank();
     }
 
     private DashboardSystemStatusDTO systemStatus() {
